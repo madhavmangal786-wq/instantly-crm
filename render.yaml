@@ -1,0 +1,28 @@
+# Render blueprint — deploys automatically from GitHub on every push.
+# Services
+services:
+  - type: web
+    name: instantly-crm
+    runtime: node
+    plan: free
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: node --disable-warning=ExperimentalWarning src/server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_USERNAME
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: INSTANTLY_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: FOLLOWUP_DAYS
+        sync: false

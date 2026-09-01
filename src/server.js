@@ -31,6 +31,7 @@ app.post('/api/login', (req, res) => {
   }
   return res.status(401).json({ error: 'Invalid credentials' });
 });
+app.get('/api/health', (req, res) => res.json({ ok: true }));
 app.use('/api', (req, res, next) => {
   if (!AUTH_PASS) return next();
   const cookie = (req.headers.cookie || '').split(';').map((c) => c.trim()).find((c) => c.startsWith(COOKIE + '='));
@@ -538,6 +539,21 @@ function stripRaw(obj) {
 
 const PORT = process.env.PORT || 3000;
 let syncTimer = null;
+
+async function seedSettingsFromEnv() {
+  const map = {
+    INSTANTLY_API_KEY: 'instantly_api_key',
+    INSTANTLY_BASE_URL: 'instantly_base_url',
+    OPENAI_API_KEY: 'openai_api_key',
+    OPENAI_BASE_URL: 'openai_base_url',
+    OPENAI_MODEL: 'openai_model',
+    SENDER_FIRST_NAME: 'sender_first_name',
+    FOLLOWUP_DAYS: 'followup_days',
+  };
+  for (const [envKey, settingKey] of Object.entries(map)) {
+    if (process.env[envKey]) await setSetting(settingKey, String(process.env[envKey]).trim());
+  }
+}
 async function scheduleSync() {
   if (syncTimer) clearInterval(syncTimer);
   const intervalMin = parseInt(await getSetting('sync_interval_min', '5'), 10) || 5;
@@ -549,6 +565,7 @@ async function scheduleSync() {
   try {
     await initSchema();
     await markStaleDrafts();
+    await seedSettingsFromEnv();
     console.log('[db] schema ready');
   } catch (e) {
     console.error('[db] init failed:', e.message);
