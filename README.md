@@ -1,0 +1,43 @@
+# Instantly CRM
+
+A minimal web CRM that syncs with your Instantly workspace and lets you reply to leads with AI-generated, human-sounding emails.
+
+## Features
+
+- **Auto-sync** — pulls campaigns, leads, emails, replies, and lead history from the Instantly API on an interval (default every 5 min) plus a manual "Sync now" button.
+- **Leads organized by campaign** — filter by status (**Needs Reply / Follow Up / Appointment / Done**), priority, date range, and search; sortable.
+- **Campaign setup** — per-campaign context: offer, ICP, tone, FAQs, notes.
+- **AI replies** — generates a realistic draft using the campaign context + full conversation. You review, edit, refine ("shorter", "more casual", …), then **Send** — it goes out through Instantly as a reply to the lead's email.
+- **Auto status tracking** — new replies are detected on sync and marked *Needs Reply*; sending a reply moves the lead to *Follow Up*; Instantly interest status (meeting booked, won, not interested…) maps to *Appointment / Done* automatically.
+- **Dashboard** — counts for each status plus lists of leads needing attention and recent activity.
+- **Lead history** — full email thread, activity log, and status/priority management per lead.
+
+## Requirements
+
+- Node.js >= 22.5
+- Instantly API key (Instantly → Settings → API Keys; needs `leads:read`, `emails:read`, `emails:create`, `campaigns:read` scopes)
+- OpenAI API key (used only to generate drafts)
+
+## Run
+
+```bash
+npm install
+npm start        # http://localhost:3000
+```
+
+Open the app, go to **Settings**, paste your Instantly and OpenAI keys, and hit **Sync now**. Then set up context on each campaign (Campaigns tab) — the AI uses it to write replies.
+
+Keys are stored locally in `data/crm.db` on your machine only.
+
+## Notes
+
+- The sync fetches up to 20 pages of leads and 3 pages of emails per campaign per run (tunable via the `sync_leads_pages` / `sync_email_pages` settings keys) and respects the emails endpoint rate limit (20 req/min).
+- The reply is sent via `POST /api/v2/emails/reply` to the last email in the lead's thread, from the sending account Instantly used for that thread.
+
+## Test
+
+Runs the full flow (sync, filters, dashboard, send, status management) against a mock Instantly API — no real keys needed:
+
+```bash
+node test/e2e.js
+```

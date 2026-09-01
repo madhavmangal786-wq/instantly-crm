@@ -1,0 +1,1228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Instantly CRM</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --border: #e4e7ec;
+    --text: #1a1d21;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-dark: #1d4ed8;
+    --green: #16a34a;
+    --amber: #d97706;
+    --purple: #7c3aed;
+    --red: #dc2626;
+    --gray: #9ca3af;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+    background: var(--card); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .brand { font-weight: 700; font-size: 16px; letter-spacing: -0.2px; }
+  .brand span { color: var(--accent); }
+  .spacer { flex: 1; }
+  nav { display: flex; gap: 4px; }
+  nav button {
+    border: 0; background: none; padding: 8px 12px; border-radius: 8px;
+    font-size: 14px; font-weight: 500; color: var(--muted); cursor: pointer;
+  }
+  nav button.active { background: #eef2ff; color: var(--accent-dark); }
+  nav button:hover { background: #f1f2f4; color: var(--text); }
+  .sync-pill {
+    display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+    background: var(--bg); border: 1px solid var(--border); padding: 4px 10px; border-radius: 999px;
+  }
+  .sync-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gray); }
+  .sync-pill.running .dot { background: var(--amber); animation: pulse 1s infinite; }
+  .sync-pill.error .dot { background: var(--red); }
+  .sync-pill.ok .dot { background: var(--green); }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  .btn {
+    border: 1px solid var(--border); background: var(--card); color: var(--text);
+    padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .btn:hover { background: #f1f2f4; }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-dark); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  main { max-width: 1080px; margin: 0 auto; padding: 24px 20px 60px; }
+  .view { display: none; }
+  .view.active { display: block; }
+  h1 { font-size: 20px; letter-spacing: -0.3px; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
+  }
+  .card .num { font-size: 28px; font-weight: 700; letter-spacing: -1px; }
+  .card .lbl { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .card.clickable { cursor: pointer; }
+  .card.clickable:hover { border-color: var(--accent); }
+  .panel {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .panel h2 { font-size: 15px; margin-bottom: 12px; }
+  .panel-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .panel-title h2 { margin: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+    color: var(--muted); padding: 6px 10px; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td { padding: 9px 10px; border-bottom: 1px solid #f0f1f3; vertical-align: middle; }
+  tr.row { cursor: pointer; }
+  tr.row:hover td { background: #f8f9fb; }
+  .name { font-weight: 600; }
+  .email { color: var(--muted); font-size: 12px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+  }
+  .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .st-needs_reply { background: #fee2e2; color: var(--red); }
+  .st-follow_up { background: #fef3c7; color: var(--amber); }
+  .st-appointment { background: #ede9fe; color: var(--purple); }
+  .st-done { background: #dcfce7; color: var(--green); }
+  .st-none { background: #f3f4f6; color: var(--gray); }
+  .st-high { background: #fee2e2; color: var(--red); }
+  .st-normal { background: #e0e7ff; color: var(--accent-dark); }
+  .st-low { background: #f3f4f6; color: var(--muted); }
+  .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
+  .filters input, .filters select {
+    border: 1px solid var(--border); background: var(--card); border-radius: 8px;
+    padding: 7px 10px; font-size: 13px; color: var(--text); outline: none;
+  }
+  .filters input:focus, .filters select:focus { border-color: var(--accent); }
+  .filters .search { flex: 1; min-width: 160px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    border: 1px solid var(--border); background: var(--card); color: var(--muted);
+    border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .chip.active { border-color: var(--accent); color: var(--accent-dark); background: #eef2ff; }
+  .empty { color: var(--muted); text-align: center; padding: 32px 0; }
+  .detail-header { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+  .detail-header .who { flex: 1; min-width: 220px; }
+  .detail-header h1 { margin: 0; }
+  .detail-header .meta { color: var(--muted); font-size: 13px; }
+  .detail-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .detail-actions select {
+    border: 1px solid var(--border); background: var(--card); border-radius: 8px;
+    padding: 7px 10px; font-size: 13px; outline: none;
+  }
+  .thread { display: flex; flex-direction: column; gap: 12px; }
+  .msg {
+    border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+    background: var(--card); max-width: 92%;
+  }
+  .msg.in { align-self: flex-start; background: #f9fafb; }
+  .msg.out { align-self: flex-end; background: #eef2ff; }
+  .msg .mhead { font-size: 12px; color: var(--muted); display: flex; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  .msg .mhead b { color: var(--text); font-weight: 600; }
+  .msg .mbody { white-space: pre-wrap; font-size: 13.5px; }
+  .conv { display: flex; flex-direction: column; gap: 6px; }
+  .conv-toggle { display: flex; flex-direction: column; gap: 6px; }
+  .conv-toggle .link-btn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0; text-align: left; align-self: flex-start; }
+  .conv-earlier { display: none; flex-direction: column; gap: 8px; }
+  .conv-earlier.open { display: flex; }
+  .composer textarea, .composer input {
+    width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+    font-size: 13.5px; font-family: inherit; color: var(--text); outline: none;
+  }
+  .composer textarea { min-height: 140px; resize: vertical; margin-top: 8px; }
+  .composer input { margin-top: 8px; }
+  .composer textarea:focus, .composer input:focus { border-color: var(--accent); }
+  .composer .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .composer .refine { flex: 1; min-width: 200px; }
+  .composer .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .activity { list-style: none; }
+  .activity li {
+    padding: 8px 0; border-bottom: 1px solid #f0f1f3; font-size: 13px; color: var(--muted);
+    display: flex; gap: 8px; align-items: baseline;
+  }
+  .activity li:last-child { border-bottom: 0; }
+  .activity li b { color: var(--text); font-weight: 600; }
+  .activity .time { margin-left: auto; white-space: nowrap; font-size: 12px; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .form-grid .full { grid-column: 1 / -1; }
+  .field label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+  .field input, .field textarea {
+    width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px;
+    font-size: 13px; font-family: inherit; outline: none; color: var(--text);
+  }
+  .field textarea { resize: vertical; min-height: 90px; }
+  .field input:focus, .field textarea:focus { border-color: var(--accent); }
+  .field .hint { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .campaign-item {
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--card);
+    margin-bottom: 8px; cursor: pointer;
+  }
+  .campaign-item:hover { border-color: var(--accent); }
+  .campaign-item .cname { font-weight: 600; }
+  .campaign-item .cmeta { font-size: 12px; color: var(--muted); }
+  .campaign-item .cstats { margin-left: auto; display: flex; gap: 10px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  #toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(80px);
+    background: #111827; color: #fff; padding: 10px 18px; border-radius: 10px;
+    font-size: 13px; opacity: 0; transition: all 0.25s; z-index: 100; max-width: 90%;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+  #toast.err { background: var(--red); }
+  .back { border: 0; background: none; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; padding: 0 0 8px; }
+  .inline-form { display: flex; gap: 8px; align-items: end; }
+  .select-col { width: 36px; }
+  .bulk-bar {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 10px 14px; border: 1px solid var(--accent); border-radius: 10px;
+    background: #eef2ff; margin-bottom: 10px;
+  }
+  .bulk-bar b { font-size: 13px; }
+  .due { background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 600; border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
+  .due.over { background: #fee2e2; color: var(--red); }
+  .analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .composer-actions { display: flex; gap: 8px; }
+  .template-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; }
+  .template-item .tuse { cursor: pointer; }
+  .ctx-banner { background: #fffbeb; border: 1px solid #fcd34d; color: #78350f; padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; font-size: 13px; }
+  .ctx-banner button { margin-top: 8px; }
+  @media (max-width: 700px) {
+    header { flex-wrap: wrap; }
+    nav { order: 3; width: 100%; }
+    .form-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div id="loginOverlay" style="display:none;position:fixed;inset:0;z-index:100;background:var(--bg);align-items:center;justify-content:center">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:32px;width:320px;text-align:center">
+    <div class="brand" style="font-size:20px;margin-bottom:8px">Instantly<span> CRM</span></div>
+    <div style="color:var(--muted);margin-bottom:20px;font-size:13px">Sign in to continue</div>
+    <input id="loginUser" placeholder="Username" autocomplete="username" style="width:100%;margin-bottom:10px">
+    <input id="loginPass" type="password" placeholder="Password" autocomplete="current-password" style="width:100%;margin-bottom:16px">
+    <button class="btn btn-primary" id="loginBtn" style="width:100%">Sign in</button>
+    <div id="loginErr" style="color:var(--red);font-size:12px;margin-top:10px"></div>
+  </div>
+</div>
+<header>
+  <div class="brand">Instantly<span> CRM</span></div>
+  <nav>
+    <button data-view="dashboard" class="active">Dashboard</button>
+    <button data-view="leads">Leads</button>
+    <button data-view="campaigns">Campaigns</button>
+    <button data-view="analytics">Analytics</button>
+    <button data-view="templates">Templates</button>
+    <button data-view="settings">Settings</button>
+  </nav>
+  <div class="spacer"></div>
+  <div class="sync-pill" id="syncPill" title=""><span class="dot"></span><span id="syncPillText">idle</span></div>
+  <button class="btn" id="syncBtn">Sync now</button>
+</header>
+
+<main>
+  <section class="view active" id="view-dashboard"></section>
+  <section class="view" id="view-leads"></section>
+  <section class="view" id="view-campaigns"></section>
+  <section class="view" id="view-analytics"></section>
+  <section class="view" id="view-templates"></section>
+  <section class="view" id="view-settings"></section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const STATUS_META = {
+  needs_reply: ['Needs Reply', 'st-needs_reply'],
+  follow_up: ['Follow Up', 'st-follow_up'],
+  appointment: ['Appointment', 'st-appointment'],
+  done: ['Done', 'st-done'],
+};
+const PRIORITY_META = { high: ['High', 'st-high'], normal: ['Normal', 'st-normal'], low: ['Low', 'st-low'] };
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const timeAgo = (ts) => {
+  if (!ts) return '';
+  const diff = Date.now() - new Date(ts).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24);
+  if (d < 30) return d + 'd ago';
+  return new Date(ts).toLocaleDateString();
+};
+const fmtDate = (ts) => ts ? new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+
+const state = { campaigns: [], filters: { campaign: 'all', status: 'replied', priority: '', search: '', date_from: '', date_to: '', sort: 'last_touch_desc' } };
+
+let authed = true;
+function showLogin(msg) {
+  authed = false;
+  $('#loginOverlay').style.display = 'flex';
+  if (msg) $('#loginErr').textContent = msg;
+  $('#loginPass').focus();
+}
+function hideLogin() {
+  authed = true;
+  $('#loginOverlay').style.display = 'none';
+  $('#loginErr').textContent = '';
+}
+async function submitLogin() {
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: $('#loginUser').value, password: $('#loginPass').value }),
+    });
+    if (!r.ok) {
+      let msg = 'Invalid credentials';
+      try { msg = (await r.json()).error || msg; } catch {}
+      showLogin(msg);
+      return;
+    }
+    hideLogin();
+    await loadCampaigns();
+    await renderDashboard();
+  } catch (err) {
+    showLogin('Login failed: ' + err.message);
+  }
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (res.status === 401 && !authed) {
+    showLogin();
+    throw new Error('Login required');
+  }
+  if (res.status === 401) {
+    showLogin();
+    throw new Error('Login required');
+  }
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { msg = (await res.json()).error || msg; } catch {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+function toast(msg, isErr = false) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = isErr ? 'err show' : 'show';
+  clearTimeout(t._h);
+  t._h = setTimeout(() => { t.className = ''; }, 3500);
+}
+
+function badge(status) {
+  if (!status || !STATUS_META[status]) return '<span class="badge st-none">Untracked</span>';
+  const [label, cls] = STATUS_META[status];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+function pbadge(p) {
+  if (!p || !PRIORITY_META[p]) return '';
+  const [label, cls] = PRIORITY_META[p];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+async function loadCampaigns() {
+  state.campaigns = await api('/api/campaigns');
+}
+
+// ---------- Dashboard ----------
+async function renderDashboard() {
+  const data = await api('/api/dashboard');
+  const c = data.counts;
+  const cardColor = { replied: 'var(--accent)', needs_reply: 'var(--red)', follow_up: 'var(--amber)', appointment: 'var(--purple)', done: 'var(--green)' };
+  const cards = [
+    ['Replied leads', c.replied, 'replied', 'Leads who replied to your email'],
+    ['Needs Reply', c.needs_reply, 'needs_reply', 'Replied — awaiting your answer'],
+    ['Follow Up', c.follow_up, 'follow_up', 'You replied — waiting on them'],
+    ['Appointment', c.appointment, 'appointment', 'Meeting booked or completed'],
+    ['Done', c.done, 'done', 'Won, lost, or not interested'],
+  ].map(([lbl, num, status, sub]) =>
+    `<div class="card clickable" onclick="goLeads('${status}')">
+       <div class="num" style="color:${cardColor[status]}">${num}</div>
+       <div class="lbl">${lbl}</div>
+       <div style="font-size:11px;color:var(--muted);margin-top:4px">${sub}</div>
+     </div>`).join('');
+
+  const att = data.attention.map((l) => `
+    <tr class="row" onclick="openLead('${l.id}')">
+      <td><div class="name">${esc(l.first_name || '')} ${esc(l.last_name || '')}</div><div class="email">${esc(l.email)}</div></td>
+      <td>${esc(data.campaignNames[l.campaign_id] || '')}</td>
+      <td>${badge(l.my_status)}</td>
+      <td>${pbadge(l.priority)}</td>
+      <td>${timeAgo(l.last_reply_at || l.last_touch_at)}</td>
+    </tr>`).join('');
+  const pc = data.priorityCounts || {};
+  const prioLine = `High ${pc.high || 0} · Normal ${pc.normal || 0} · Low ${pc.low || 0}`;
+
+  const act = data.recentActivity.map((a) => `
+    <li><b>${esc(a.first_name || a.email || '')}</b><span>${esc(a.detail)}</span><span class="time">${timeAgo(a.timestamp)}</span></li>`).join('');
+
+  const due = (data.followupsDue || []).map((l) => `
+    <tr class="row" onclick="openLead('${l.id}')">
+      <td><div class="name">${esc(l.first_name || '')} ${esc(l.last_name || '')}</div><div class="email">${esc(l.email)}</div></td>
+      <td>${esc(data.campaignNames[l.campaign_id] || '')}</td>
+      <td>${badge(l.my_status)}</td>
+      <td><span class="due ${new Date(l.next_touch_at) < new Date() ? 'over' : ''}">${l.next_touch_at.slice(0, 10)}</span></td>
+    </tr>`).join('');
+
+  $('#view-dashboard').innerHTML = `
+    <h1>Dashboard</h1>
+    <div class="sub">Every lead who replied to your outreach — one inbox, one queue.</div>
+    <div class="cards">${cards}</div>
+    <div class="panel">
+      <div class="panel-title"><h2>Replied leads — awaiting your reply</h2><div class="detail-actions"><button class="btn" onclick="goLeads('needs_reply')">Open full queue →</button><span class="hint" style="color:var(--muted);font-size:12px">Priority: ${prioLine}</span></div></div>
+      ${att ? `<table><thead><tr><th>Lead</th><th>Campaign</th><th>Status</th><th>Priority</th><th>Last activity</th></tr></thead><tbody>${att}</tbody></table>` : '<div class="empty">Nothing needs attention. Nice.</div>'}
+    </div>
+    <div class="panel">
+      <div class="panel-title"><h2>Follow-ups due ${(data.followups && data.followups.overdue) ? `<span class="due over">${data.followups.overdue} overdue</span>` : ''} ${(data.followups && data.followups.due_today) ? `<span class="due">${data.followups.due_today} today</span>` : ''}</h2></div>
+      ${due ? `<table><thead><tr><th>Lead</th><th>Campaign</th><th>Status</th><th>Follow-up</th></tr></thead><tbody>${due}</tbody></table>` : '<div class="empty">No follow-ups due. Nice.</div>'}
+    </div>
+    <div class="panel">
+      <div class="panel-title"><h2>Recent activity</h2></div>
+      ${act ? `<ul class="activity">${act}</ul>` : '<div class="empty">No activity yet.</div>'}
+    </div>`;
+}
+
+// ---------- Leads ----------
+function renderLeadsHeader() {
+  const groups = state.campaigns.map((c) => `<option value="${c.id}">${esc(c.kind === 'list' ? '📋 ' : '')}${esc(c.name)}${c.kind === 'list' ? ' (list)' : ''}</option>`).join('');
+  const opts = `<option value="">Select campaign or list…</option><option value="all">🌐 All campaigns &amp; lists</option>` + groups;
+  $('#view-leads').innerHTML = `
+    <h1>Leads</h1>
+    <div class="sub">All leads from your campaigns and lists. Click a lead to view the conversation.</div>
+    <div class="filters">
+      <select id="fCampaign">${opts}</select>
+      <div class="chips" id="fStatus">
+        <button class="chip ${state.filters.status === '' ? 'active' : ''}" data-v="">All</button>
+        <button class="chip ${state.filters.status === 'replied' ? 'active' : ''}" data-v="replied">Replied</button>
+        <button class="chip ${state.filters.status === 'needs_reply' ? 'active' : ''}" data-v="needs_reply">Needs Reply</button>
+        <button class="chip ${state.filters.status === 'follow_up' ? 'active' : ''}" data-v="follow_up">Follow Up</button>
+        <button class="chip ${state.filters.status === 'appointment' ? 'active' : ''}" data-v="appointment">Appointment</button>
+        <button class="chip ${state.filters.status === 'done' ? 'active' : ''}" data-v="done">Done</button>
+        <button class="chip ${state.filters.status === 'none' ? 'active' : ''}" data-v="none">Untracked</button>
+      </div>
+      <select id="fPriority">
+        <option value="">Any priority</option>
+        <option value="high">High</option>
+        <option value="normal">Normal</option>
+        <option value="low">Low</option>
+      </select>
+      <input type="date" id="fFrom" title="Last activity from">
+      <input type="date" id="fTo" title="Last activity to">
+      <select id="fSort">
+        <option value="last_touch_desc">Newest activity</option>
+        <option value="last_touch_asc">Oldest activity</option>
+        <option value="last_reply_desc">Last reply</option>
+        <option value="name">Name A–Z</option>
+        <option value="company">Company A–Z</option>
+      </select>
+      <input class="search" id="fSearch" placeholder="Search name, email, company…">
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">
+      <button class="btn" id="bulkToggleBtn" onclick="toggleBulkMode()">☑ Bulk select</button>
+      <button class="btn" onclick="exportCurrent()" title="Download these leads as CSV">⬇ Export CSV</button>
+    </div>
+    <div id="bulkBar" class="bulk-bar" style="display:none"></div>
+    <div class="panel"><table id="leadsTable"></table><div id="leadsMore" style="text-align:center;padding-top:12px"></div></div>`;
+  $('#fCampaign').value = state.filters.campaign;
+  $('#fPriority').value = state.filters.priority;
+  $('#fFrom').value = state.filters.date_from;
+  $('#fTo').value = state.filters.date_to;
+  $('#fSort').value = state.filters.sort;
+  $('#fSearch').value = state.filters.search;
+  $('#fSearch').addEventListener('input', debounce(() => { state.filters.search = $('#fSearch').value; loadLeads(); }, 250));
+  $('#fCampaign').addEventListener('change', () => { state.filters.campaign = $('#fCampaign').value; loadLeads(); });
+  $('#fPriority').addEventListener('change', () => { state.filters.priority = $('#fPriority').value; loadLeads(); });
+  $('#fFrom').addEventListener('change', () => { state.filters.date_from = $('#fFrom').value; loadLeads(); });
+  $('#fTo').addEventListener('change', () => { state.filters.date_to = $('#fTo').value; loadLeads(); });
+  $('#fSort').addEventListener('change', () => { state.filters.sort = $('#fSort').value; loadLeads(); });
+  $('#fStatus').addEventListener('click', (e) => {
+    if (e.target.tagName !== 'BUTTON') return;
+    [...$('#fStatus').children].forEach((b) => b.classList.remove('active'));
+    e.target.classList.add('active');
+    state.filters.status = e.target.dataset.v;
+    loadLeads();
+  });
+}
+
+async function loadLeads() {
+  const f = state.filters;
+  if (!f.campaign) {
+    $('#leadsTable').innerHTML = '<div class="empty">Select a campaign or lead list to see its leads.</div>';
+    $('#leadsMore').innerHTML = '';
+    return;
+  }
+  state.leadPage = 0;
+  await fetchLeadsPage(true);
+}
+
+async function fetchLeadsPage(reset) {
+  const f = state.filters;
+  const page = reset ? 0 : (state.leadPage || 0) + 1;
+  const params = new URLSearchParams({ limit: 100, offset: page * 100, ...(f.status && f.status !== 'replied' ? { my_status: f.status } : {}), ...(f.status === 'replied' ? { replied: '1' } : {}), ...(f.priority ? { priority: f.priority } : {}), ...(f.search ? { search: f.search } : {}), ...(f.date_from ? { date_from: f.date_from } : {}), ...(f.date_to ? { date_to: f.date_to } : {}), sort: f.sort });
+  const data = await api(`/api/campaigns/${f.campaign}/leads?${params}`);
+  const leads = data.leads;
+  if (page > 0 && !reset) {
+    $('#leadsTable tbody').insertAdjacentHTML('beforeend', rows(leads, _bulkMode));
+  } else {
+    $('#leadsTable').innerHTML = leads.length === 0
+      ? '<div class="empty">No leads match the current filters.</div>'
+      : `<thead><tr>${_bulkMode ? '<th class="select-col"></th>' : ''}<th>Lead</th><th>Company</th><th>Engagement</th><th>Status</th><th>Priority</th><th>Last activity</th></tr></thead><tbody>${rows(leads, _bulkMode)}</tbody>`;
+  }
+  state.leadPage = page;
+  const shown = (page + 1) * leads.length;
+  $('#leadsMore').innerHTML = (shown < data.total)
+    ? `<button class="btn" onclick="fetchLeadsPage(false)">Load more (${shown} of ${data.total})</button>`
+    : (data.total > 0 ? `<span class="hint" style="color:var(--muted);font-size:12px">Showing all ${data.total} leads</span>` : '');
+}
+
+function rows(leads, showSelect) {
+  const sel = state.selected || new Set();
+  return leads.map((l) => `
+    <tr class="${showSelect ? '' : 'row'}" ${showSelect ? '' : `onclick="openLead('${l.id}')"`}>
+      ${showSelect ? `<td class="select-col" onclick="event.stopPropagation()"><input type="checkbox" data-id="${l.id}" ${sel.has(l.id) ? 'checked' : ''} onchange="toggleSelect('${l.id}')"></td>` : ''}
+      <td><div class="name">${esc(l.first_name || '')} ${esc(l.last_name || '')}</div><div class="email">${esc(l.email)}</div></td>
+      <td>${esc(l.company_name || '')}</td>
+      <td>${l.reply_count > 0 ? `<span class="badge st-normal">${l.reply_count} reply${l.reply_count > 1 ? 's' : ''}</span>` : '<span class="badge st-low">none</span>'}
+          ${l.opened_count > 0 ? `<span class="badge st-low" title="Opened">👁 ${l.opened_count}</span>` : ''}
+          ${l.clicked_count > 0 ? `<span class="badge st-low" title="Clicked">🖱 ${l.clicked_count}</span>` : ''}</td>
+      <td>${badge(l.my_status)}</td>
+      <td>${pbadge(l.priority)}</td>
+      <td>${timeAgo(l.last_reply_at || l.last_touch_at || l.updated_at)}</td>
+    </tr>`).join('');
+}
+
+let _bulkMode = false;
+function toggleBulkMode() {
+  _bulkMode = !_bulkMode;
+  if (!_bulkMode) { state.selected = new Set(); }
+  const b = $('#bulkToggleBtn');
+  if (b) b.textContent = _bulkMode ? '☑ Exit bulk' : '☑ Bulk select';
+  reloadBulkState();
+  fetchLeadsPage(true);
+}
+function reloadBulkState() {
+  const bar = $('#bulkBar');
+  if (!bar) return;
+  state.selected = state.selected || new Set();
+  if (state.selected.size > 0) {
+    bar.style.display = 'flex';
+    bar.innerHTML = `<b>${state.selected.size} selected</b>
+      <button class="btn" onclick="bulkAction('status','needs_reply')">Needs Reply</button>
+      <button class="btn" onclick="bulkAction('status','follow_up')">Follow Up</button>
+      <button class="btn" onclick="bulkAction('status','appointment')">Appointment</button>
+      <button class="btn" onclick="bulkAction('status','done')">Done</button>
+      <button class="btn" onclick="bulkAction('priority','high')">High prio</button>
+      <button class="btn" onclick="bulkAction('priority','low')">Low prio</button>
+      <button class="btn" onclick="bulkFollowUp()">Schedule follow-up (in 3d)</button>
+      <button class="btn" onclick="clearSelection()">Clear</button>`;
+  } else {
+    bar.style.display = 'none';
+  }
+}
+window.toggleSelect = (id) => {
+  state.selected = state.selected || new Set();
+  if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id);
+  reloadBulkState();
+};
+window.clearSelection = () => { state.selected = new Set(); reloadBulkState(); };
+async function bulkAction(action, value) {
+  const ids = [...(state.selected || [])];
+  const r = await api('/api/leads/bulk', { method: 'POST', body: { ids, action, value } });
+  toast(r.detail || 'Done');
+  state.selected = new Set();
+  reloadBulkState();
+  fetchLeadsPage(true);
+}
+async function bulkFollowUp() {
+  const ids = [...(state.selected || [])];
+  const r = await api('/api/leads/bulk', { method: 'POST', body: { ids, action: 'follow_up', value: '3' } });
+  toast(r.detail || 'Scheduled');
+  state.selected = new Set();
+  reloadBulkState();
+}
+function exportCurrent() {
+  const f = state.filters;
+  const params = new URLSearchParams({});
+  if (f.status === 'replied') params.set('replied', '1');
+  else if (f.status && f.status !== 'none') params.set('status', f.status);
+  if (f.priority) params.set('priority', f.priority);
+  window.open('/api/export?' + params.toString(), '_blank');
+}
+
+// ---------- Lead detail ----------
+function cleanBody(text) {
+  if (!text) return '';
+  let t = String(text).replace(/\r\n/g, '\n');
+  t = t.split(/\n\s*On .+ wrote:\s*\n/i)[0];
+  t = t.split(/\n\s*-{2,} ?Original Message ?-{2,}\s*\n/i)[0];
+  t = t.split(/\n\s*From: .+\n\s*Sent: .+\n\s*To: .+\n(?:(?:.*\n){0,4}Subject: .+\n)?/i)[0];
+  t = t.split(/\n\s*Begin forwarded message[:\s]*\n/i)[0];
+  const lines = t.split('\n').filter((ln) => !/^\s*>/.test(ln));
+  t = lines.join('\n').replace(/\n\s*[-_]{3,}\s*\n/g, '\n');
+  return t.trim();
+}
+
+function toggleConv(btn) {
+  const box = btn.parentElement.querySelector('.conv-earlier');
+  const open = box.classList.toggle('open');
+  const n = btn.dataset.count;
+  btn.textContent = open
+    ? `Hide earlier messages`
+    : `Show ${n} earlier message${Number(n) > 1 ? 's' : ''} in this conversation`;
+}
+
+const INTEREST_LABELS = {
+  0: 'Out of Office', 1: 'Interested', 2: 'Meeting Booked', 3: 'Meeting Completed', 4: 'Won',
+  '-1': 'Not Interested', '-2': 'Wrong Person', '-3': 'Lost', '-4': 'No Show',
+};
+
+let composerUnsaved = {}; // keyed by lead id: { [leadId]: { subject, body } }
+
+async function openLead(id) {
+  await loadCampaigns();
+  const data = await api(`/api/leads/${id}`);
+  const l = data.lead;
+  const camp = data.campaign;
+  const byThread = new Map();
+  for (const e of data.thread) {
+    if (e.is_auto) continue;
+    const key = e.thread_id || 't' + e.id;
+    if (!byThread.has(key)) byThread.set(key, []);
+    byThread.get(key).push(e);
+  }
+  const auto = data.thread.filter((e) => e.is_auto);
+  const conv = (e) => `
+    <div class="msg ${e.direction === 'received' ? 'in' : 'out'}">
+      <div class="mhead">
+        <b>${e.direction === 'received' ? esc(l.email) : 'You'}</b>
+        <span>${esc(e.subject || '')}</span>
+        <span>${fmtDate(e.timestamp)}</span>
+      </div>
+      <div class="mbody">${esc(cleanBody(e.body_text || ''))}</div>
+    </div>`;
+  const msgs = [...byThread.entries()].map(([, arr]) => {
+    const latest = arr[arr.length - 1];
+    const earlier = arr.slice(0, -1);
+    return `
+      <div class="conv">
+        ${conv(latest)}
+        ${earlier.length ? `
+          <div class="conv-toggle">
+            <button class="link-btn" onclick="toggleConv(this)" data-count="${earlier.length}">Show ${earlier.length} earlier message${earlier.length > 1 ? 's' : ''} in this conversation</button>
+            <div class="conv-earlier">${earlier.map(conv).join('')}</div>
+          </div>` : ''}
+      </div>`;
+  }).join('') || '<div class="empty">No emails yet for this lead.</div>';
+  const autoSection = auto.length ? `
+    <div class="conv-toggle">
+      <button class="link-btn" onclick="toggleConv(this)" data-count="${auto.length}">Show ${auto.length} automatic message${auto.length > 1 ? 's' : ''} (out-of-office / autoresponder)</button>
+      <div class="conv-earlier">${auto.map(conv).join('')}</div>
+    </div>` : '';
+
+  const act = data.activity.map((a) => `
+    <li><b>${esc(a.type.replace(/_/g, ' '))}</b><span>${esc(a.detail)}</span><span class="time">${timeAgo(a.timestamp)}</span></li>`).join('');
+
+  const eng = [l.opened_count > 0 ? `👁 opened ${l.opened_count}` : '', l.clicked_count > 0 ? `🖱 clicked ${l.clicked_count}` : ''].filter(Boolean).join(' · ');
+
+  $('#view-leads').innerHTML = `
+    <button class="back" onclick="renderLeads()">← Back to leads</button>
+    <div class="detail-header">
+      <div class="who">
+        <h1>${esc(l.first_name || '')} ${esc(l.last_name || '')}</h1>
+        <div class="meta">${esc(l.email)} · ${esc(l.company_name || '—')}${l.job_title ? ' · ' + esc(l.job_title) : ''}${camp ? ' · ' + (camp.kind === 'list' ? 'List: ' : '') + esc(camp.name) : ''}${eng ? ' · ' + eng : ''}</div>
+      </div>
+      <div class="detail-actions">
+        <select id="lStatus">
+          ${Object.entries(STATUS_META).map(([k, [label]]) => `<option value="${k}" ${l.my_status === k ? 'selected' : ''}>${label}</option>`).join('')}
+          <option value="none" ${!l.my_status ? 'selected' : ''}>Untracked</option>
+        </select>
+        <select id="lPriority">
+          ${Object.entries(PRIORITY_META).map(([k, [label]]) => `<option value="${k}" ${(l.priority || 'normal') === k ? 'selected' : ''}>${label} priority</option>`).join('')}
+        </select>
+        <select id="lInterest" title="Update interest in Instantly">
+          <option value="">Interest in Instantly…</option>
+          ${Object.entries(INTEREST_LABELS).map(([k, label]) => `<option value="${k}" ${String(l.interest_status) === k ? 'selected' : ''}>${label}</option>`).join('')}
+        </select>
+        <button class="btn" onclick="openLead('${l.id}')">↻ Refresh</button>
+      </div>
+      <div class="detail-actions" style="margin-top:8px">
+        <input type="date" id="lFollowUp" title="Schedule a follow-up reminder" value="${l.next_touch_at ? l.next_touch_at.slice(0,10) : ''}">
+        <button class="btn" id="lFollowUpBtn" title="Schedule follow-up">Follow-up</button>
+        <button class="btn" id="lClearFollowUp" title="Clear follow-up" ${l.next_touch_at ? '' : 'style="display:none"'}>Clear</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><h2>Conversation</h2><div id="convBadges">${badge(l.my_status)} ${pbadge(l.priority)}</div></div>
+      <div class="thread">${msgs}${autoSection}</div>
+    </div>
+    <div class="panel composer" id="composer"></div>
+    <div class="panel">
+      <div class="panel-title"><h2>Lead history</h2></div>
+      ${act ? `<ul class="activity">${act}</ul>` : '<div class="empty">No history yet.</div>'}
+    </div>`;
+  document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
+  $('#view-leads').classList.add('active');
+  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === 'leads'));
+
+  $('#lStatus').addEventListener('change', async () => {
+    const v = $('#lStatus').value;
+    if (v === 'none') {
+      try {
+        await api(`/api/leads/${l.id}/status`, { method: 'POST', body: { status: 'none' } });
+        l.my_status = null;
+        $('#convBadges').innerHTML = badge(null) + ' ' + pbadge(l.priority);
+        toast('Lead untracked — it won\'t be auto-tracked or surfaced anymore');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    await api(`/api/leads/${l.id}/status`, { method: 'POST', body: { status: v } });
+    l.my_status = v;
+    $('#convBadges').innerHTML = badge(v) + ' ' + pbadge(l.priority);
+    toast('Status updated — your choice is kept, sync won\'t override it');
+  });
+  $('#lPriority').addEventListener('change', async () => {
+    await api(`/api/leads/${l.id}/priority`, { method: 'POST', body: { priority: $('#lPriority').value } });
+    l.priority = $('#lPriority').value;
+    $('#convBadges').innerHTML = badge(l.my_status) + ' ' + pbadge(l.priority);
+    toast('Priority updated');
+  });
+  $('#lInterest').addEventListener('change', async () => {
+    const v = $('#lInterest').value;
+    if (!v) return;
+    try {
+      const r = await api(`/api/leads/${l.id}/interest`, { method: 'POST', body: { interest: v } });
+      toast(`Interest set to ${INTEREST_LABELS[v]} in Instantly`);
+      if (r.my_status && r.my_status !== l.my_status) {
+        l.my_status = r.my_status;
+        $('#convBadges').innerHTML = badge(l.my_status) + ' ' + pbadge(l.priority);
+        $('#lStatus').value = l.my_status;
+      }
+    } catch (err) {
+      toast(err.message, true);
+      $('#lInterest').value = '';
+    }
+  });
+  $('#lFollowUpBtn').addEventListener('click', async () => {
+    const date = $('#lFollowUp').value;
+    if (!date) return toast('Pick a date first.', true);
+    try {
+      if (date === l.next_touch_at && l.next_touch_at) return toast('Follow-up already set for that date', true);
+      await api(`/api/leads/${l.id}/follow-up`, { method: 'POST', body: { date } });
+      l.next_touch_at = date + 'T00:00:00';
+      $('#lClearFollowUp').style.display = '';
+      toast('Follow-up scheduled');
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#lClearFollowUp').addEventListener('click', async () => {
+    await api(`/api/leads/${l.id}/follow-up`, { method: 'POST', body: { clear: true } });
+    l.next_touch_at = null;
+    $('#lFollowUp').value = '';
+    $('#lClearFollowUp').style.display = 'none';
+    toast('Follow-up cleared');
+  });
+  renderComposer(l, data.thread, data.draft);
+}
+
+function renderComposer(lead, thread, draft) {
+  const el = $('#composer');
+  const key = lead.id;
+  const unsaved = composerUnsaved[key] || { subject: '', body: '' };
+  composerUnsaved[key] = { subject: '', body: '' };
+  const initialSubject = unsaved.subject || (draft ? draft.subject : '');
+  const initialBody = unsaved.body || (draft ? draft.body : '');
+  el.innerHTML = `
+    <div class="panel-title"><h2>AI reply</h2><span class="hint">${draft ? 'Loaded your saved draft — regenerate anytime.' : 'Drafts are saved until you send or discard them.'}</span></div>
+    <div class="row">
+      <button class="btn btn-primary" id="genBtn">✨ Generate AI reply</button>
+      <span class="hint">Uses this campaign's context + full conversation.</span>
+    </div>
+    <input id="dSubject" placeholder="Subject — auto-filled by AI" value="${esc(initialSubject)}">
+    <textarea id="dBody" placeholder="AI reply will appear here. Edit it freely before sending.">${esc(initialBody)}</textarea>
+    <div class="row">
+      <input class="refine" id="refineInput" placeholder='Refine: e.g. "shorter", "more casual", "mention our case study"'>
+      <button class="btn" id="refineBtn" disabled>Refine with AI</button>
+    </div>
+    <div class="row">
+      <button class="btn btn-primary" id="sendBtn" disabled>Send via Instantly</button>
+      <button class="btn" id="discardBtn" disabled>Discard</button>
+      <button class="btn" id="tmplBtn" disabled title="Save the current draft as a reusable template">💾 Save as template</button>
+    </div>`;
+
+  let draftId = draft ? draft.id : null;
+  const genBtn = $('#genBtn');
+  const sendBtn = $('#sendBtn');
+  const refineBtn = $('#refineBtn');
+  const discardBtn = $('#discardBtn');
+  const tmplBtn = $('#tmplBtn');
+  if (draftId && initialBody) { sendBtn.disabled = false; discardBtn.disabled = false; refineBtn.disabled = false; tmplBtn.disabled = false; }
+  const saveUnsaved = () => { composerUnsaved[key] = { subject: $('#dSubject').value, body: $('#dBody').value }; };
+  $('#dSubject').addEventListener('input', saveUnsaved);
+  $('#dBody').addEventListener('input', saveUnsaved);
+
+  async function generate(instruction) {
+    genBtn.disabled = true;
+    refineBtn.disabled = true;
+    const start = Date.now();
+    const ticker = setInterval(() => {
+      genBtn.textContent = `✨ Generating… ${Math.round((Date.now() - start) / 1000)}s`;
+    }, 1000);
+    genBtn.textContent = '✨ Generating…';
+    try {
+      const path = draftId ? `/api/drafts/${draftId}/refine` : `/api/leads/${lead.id}/draft`;
+      const d = await api(path, { method: 'POST', body: instruction ? { instruction } : {} });
+      draftId = d.id;
+      $('#dSubject').value = d.subject || '';
+      $('#dBody').value = d.body || '';
+      composerUnsaved[key] = { subject: $('#dSubject').value, body: $('#dBody').value };
+      sendBtn.disabled = false;
+      discardBtn.disabled = false;
+      tmplBtn.disabled = false;
+      if (d.priority && d.priority !== (lead.priority || 'normal')) {
+        lead.priority = d.priority;
+        $('#lPriority').value = d.priority;
+        $('#convBadges').innerHTML = badge(lead.my_status) + ' ' + pbadge(d.priority);
+        toast(`AI suggests priority: ${PRIORITY_META[d.priority][0]} — applied`);
+      }
+      if (d.status && d.status !== lead.my_status) {
+        lead.my_status = d.status;
+        $('#lStatus').value = d.status;
+        $('#convBadges').innerHTML = badge(d.status) + ' ' + pbadge(lead.priority);
+        toast(`AI suggests status: ${STATUS_META[d.status][0]} — applied`);
+      }
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      clearInterval(ticker);
+      genBtn.disabled = false;
+      refineBtn.disabled = false;
+      genBtn.textContent = '✨ Generate AI reply';
+    }
+  }
+
+  genBtn.addEventListener('click', () => generate(null));
+  refineBtn.addEventListener('click', () => {
+    const instr = $('#refineInput').value.trim();
+    if (!draftId) return toast('Generate a draft first.', true);
+    if (!instr) return toast('Type what you want changed first.', true);
+    generate(instr);
+  });
+  tmplBtn.addEventListener('click', async () => {
+    const subject = $('#dSubject').value.trim();
+    const body = $('#dBody').value;
+    if (!body) return toast('Generate a draft first.', true);
+    const name = window.prompt('Name this template:', subject ? subject.slice(0, 50) : 'AI reply template');
+    if (!name) return;
+    let campaignId = null;
+    try { campaignId = (await api('/api/campaigns/' + lead.campaign_id)).id; } catch (e) { campaignId = null; }
+    try {
+      await api('/api/templates', { method: 'POST', body: { name, subject, body, campaign_id: campaignId } });
+      toast('Template saved');
+    } catch (err) { toast(err.message, true); }
+  });
+  sendBtn.addEventListener('click', async () => {
+    if (!draftId) return;
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Sending…';
+    try {
+      await api(`/api/drafts/${draftId}/send`, { method: 'POST', body: { subject: $('#dSubject').value, body: $('#dBody').value } });
+      toast('Reply sent through Instantly');
+      openLead(lead.id);
+    } catch (err) {
+      toast(err.message, true);
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send via Instantly';
+    }
+  });
+  discardBtn.addEventListener('click', async () => {
+    if (!draftId) return;
+    await api(`/api/drafts/${draftId}`, { method: 'DELETE' });
+    draftId = null;
+    $('#dSubject').value = '';
+    $('#dBody').value = '';
+    composerUnsaved[key] = { subject: '', body: '' };
+    sendBtn.disabled = true;
+    discardBtn.disabled = true;
+    toast('Draft discarded');
+  });
+}
+
+// ---------- Campaigns ----------
+async function renderCampaigns() {
+  await loadCampaigns();
+  const list = state.campaigns.map((c) => {
+    const s = c.stats;
+    const badge = c.kind === 'list' ? '<span class="badge st-none" style="color:var(--muted)">list</span>' : '<span class="badge st-normal">campaign</span>';
+    return `
+      <div class="campaign-item" onclick="openCampaign('${c.id}')">
+        <div>
+          <div class="cname">${esc(c.name)} ${badge}</div>
+          <div class="cmeta">${c.id}</div>
+        </div>
+        <div class="cstats">
+          <span>${s ? s.total : 0} leads</span>
+          ${s ? `<span style="color:var(--red)">${s.needs_reply} reply</span>` : ''}
+          ${s ? `<span style="color:var(--amber)">${s.follow_up} follow-up</span>` : ''}
+          ${s ? `<span style="color:var(--purple)">${s.appointment} appt</span>` : ''}
+        </div>
+      </div>`;
+  }).join('') || '<div class="empty">No campaigns synced yet. Add your Instantly API key in Settings and hit Sync now.</div>';
+
+  $('#view-campaigns').innerHTML = `
+    <h1>Campaigns &amp; Lists</h1>
+    <div class="sub">Pick a campaign or list to set up its context — the AI uses this to write realistic replies.</div>
+    ${list}`;
+}
+
+async function openCampaign(id) {
+  await loadCampaigns();
+  const c = await api(`/api/campaigns/${id}`);
+  const ctxEmpty = !(c.context_offer || '').trim() && !(c.context_icp || '').trim();
+  const ctxBanner = (c.kind !== 'list' && ctxEmpty) ? `
+    <div class="ctx-banner">
+      ⚠️ <b>This campaign has no context set.</b> The AI uses this info to write realistic replies. Without it, replies may sound generic.
+      <br><button class="btn" onclick="document.getElementById('cOffer').focus()">Fill it in below</button>
+    </div>` : '';
+  $('#view-campaigns').innerHTML = `
+    <button class="back" onclick="renderCampaigns()">← Back to campaigns</button>
+    <h1>${esc(c.name)} ${c.kind === 'list' ? '<span class="badge st-none">list</span>' : ''}</h1>
+    <div class="sub">Everything here feeds the AI when it drafts replies for leads in this ${c.kind === 'list' ? 'list' : 'campaign'}. Note: ${c.kind === 'list' ? 'leads added to this list' : 'leads in this campaign'} sync automatically.</div>
+    ${ctxBanner}
+    <div class="panel">
+      <div class="panel-title"><h2>Campaign context</h2><button class="btn btn-primary" id="saveCtx">Save</button></div>
+      <div class="form-grid">
+        <div class="field full">
+          <label>Offer — what we sell and the specific pitch</label>
+          <textarea id="cOffer" placeholder="e.g. We build AI phone agents that handle inbound sales calls. 14-day pilot, $500 setup, then $199/mo.">${esc(c.context_offer)}</textarea>
+        </div>
+        <div class="field full">
+          <label>Ideal customer profile (ICP)</label>
+          <textarea id="cIcp" placeholder="e.g. B2B service businesses with 10–50 employees, high inbound call volume, founders who answer their own phones.">${esc(c.context_icp)}</textarea>
+        </div>
+        <div class="field full">
+          <label>Tone</label>
+          <input id="cTone" value="${esc(c.context_tone)}" placeholder="e.g. casual and direct, like a busy founder, no salesy language">
+        </div>
+        <div class="field full">
+          <label>FAQs / common objections</label>
+          <textarea id="cFaqs" placeholder="e.g. Cost? $500 setup + $199/mo. Integration? Works with any CRM via API. Privacy? We're SOC 2.">${esc(c.context_faqs)}</textarea>
+        </div>
+        <div class="field full">
+          <label>Notes</label>
+          <textarea id="cNotes" placeholder="e.g. We close over Zoom demos, never push on first reply, mention our refund policy only if asked.">${esc(c.context_notes)}</textarea>
+        </div>
+      </div>
+    </div>`;
+  $('#saveCtx').addEventListener('click', async () => {
+    await api(`/api/campaigns/${id}/context`, {
+      method: 'PUT',
+      body: { offer: $('#cOffer').value, icp: $('#cIcp').value, tone: $('#cTone').value, faqs: $('#cFaqs').value, notes: $('#cNotes').value },
+    });
+    toast('Campaign context saved');
+  });
+}
+
+// ---------- Settings ----------
+async function renderSettings() {
+  const st = await api('/api/state');
+  const s = st.settings;
+  $('#view-settings').innerHTML = `
+    <h1>Settings</h1>
+    <div class="sub">API keys are stored locally in the SQLite database on this machine only.</div>
+    <div class="panel">
+      <div class="panel-title"><h2>Instantly</h2></div>
+      <div class="form-grid">
+        <div class="field full">
+          <label>API key</label>
+          <input id="sInstantlyKey" placeholder="${s.instantly_api_key ? 'Saved: ' + s.instantly_api_key + ' (leave blank to keep)' : 'Paste your Instantly API key'}" type="password">
+          <div class="hint">Instantly → Settings → API Keys → Copy. The key is a long string with no spaces — copy just the key, not the page text.</div>
+        </div>
+        <div class="field">
+          <label>Base URL</label>
+          <input id="sInstantlyUrl" value="${esc(s.instantly_base_url)}">
+        </div>
+        <div class="field">
+          <label>Sync interval (minutes)</label>
+          <input id="sInterval" value="${esc(s.sync_interval_min)}" type="number" min="1">
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><h2>AI reply engine</h2><span class="hint">Any OpenAI-compatible endpoint — defaults to OpenCode Zen (free model: deepseek-v4-flash-free)</span></div>
+      <div class="form-grid">
+        <div class="field full">
+          <label>API key</label>
+          <input id="sOpenaiKey" placeholder="${s.openai_api_key ? 'Saved: ' + s.openai_api_key + ' (leave blank to keep)' : 'Paste your AI API key (e.g. your opencode Zen key)'}" type="password">
+        </div>
+        <div class="field">
+          <label>Base URL (OpenAI-compatible)</label>
+          <input id="sOpenaiUrl" value="${esc(s.openai_base_url)}" placeholder="https://opencode.ai/zen/v1">
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <input id="sModel" value="${esc(s.openai_model)}">
+        </div>
+        <div class="field">
+          <label>Your first name (signs AI replies)</label>
+          <input id="sSenderName" value="${esc(s.sender_first_name)}" placeholder="Detected from your sending accounts — leave empty to auto-detect">
+          <span class="hint">${s.sender_first_name ? `Currently: ${esc(s.sender_first_name)}` : 'Auto-detected from your sending email accounts (e.g. jaysenxo@… → Jaysen). Type a name to override.'}</span>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="gap:8px;display:flex;align-items:center;margin-top:14px">
+      <button class="btn btn-primary" id="saveSettings">Save settings</button>
+      <button class="btn" id="testConns">🔌 Test connections</button>
+      <span class="hint" id="testResult" style="color:var(--muted);font-size:12px"></span>
+    </div>`;
+  $('#testConns').addEventListener('click', async () => {
+    const btn = $('#testConns');
+    const out = $('#testResult');
+    btn.disabled = true;
+    out.textContent = 'Testing…';
+    try {
+      const r = await api('/api/test-connections', { method: 'POST' });
+      const parts = [];
+      const inst = r.results && r.results.instantly;
+      const ai = r.results && r.results.ai;
+      parts.push(inst ? (inst.ok ? '✓ Instantly OK' : '✗ Instantly: ' + inst.detail) : '');
+      parts.push(ai ? (ai.ok ? '✓ AI OK' : '✗ AI: ' + ai.detail) : '');
+      out.textContent = parts.filter(Boolean).join('  ·  ');
+      if (inst && !inst.ok) toast('Instantly connection failed — ' + inst.detail, true);
+      if (ai && !ai.ok) toast('AI connection failed — ' + ai.detail, true);
+    } catch (err) {
+      out.textContent = 'Test failed';
+      toast(err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  $('#saveSettings').addEventListener('click', async () => {
+    const keyHint = (id) => {
+      const v = document.getElementById(id).value.trim();
+      if (!v) return null;
+      if (/\s/.test(v) || v.length < 16) return `${id === 'sInstantlyKey' ? 'Instantly' : 'AI'} key looks wrong — it should be a long string with no spaces. Re-copy it from the API keys page (select all, copy).`;
+      return null;
+    };
+    const warn = keyHint('sInstantlyKey') || keyHint('sOpenaiKey');
+    if (warn) { toast(warn, true); return; }
+    const body = {};
+    if ($('#sInstantlyKey').value) body.instantly_api_key = $('#sInstantlyKey').value;
+    if ($('#sOpenaiKey').value) body.openai_api_key = $('#sOpenaiKey').value;
+    body.instantly_base_url = $('#sInstantlyUrl').value;
+    body.openai_base_url = $('#sOpenaiUrl').value;
+    body.openai_model = $('#sModel').value;
+    body.sender_first_name = $('#sSenderName').value;
+    body.sync_interval_min = $('#sInterval').value;
+    await api('/api/settings', { method: 'POST', body });
+    toast('Settings saved');
+    renderSettings();
+  });
+}
+
+// ---------- Analytics ----------
+async function renderAnalytics() {
+  await loadCampaigns();
+  const campaignOpts = `<option value="">All campaigns</option>` + state.campaigns.filter(c => c.kind === 'campaign').map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  $('#view-analytics').innerHTML = `
+    <h1>Analytics</h1>
+    <div class="sub">Reply, open, and engagement rates for your outreach.</div>
+    <div class="filters"><select id="aCampaign">${campaignOpts}</select></div>
+    <div id="analyticsPanel"></div>`;
+  $('#aCampaign').addEventListener('change', renderAnalyticsData);
+  await renderAnalyticsData();
+}
+
+async function renderAnalyticsData() {
+  const cid = $('#aCampaign').value;
+  const j = await api('/api/analytics' + (cid ? '?campaign=' + cid : ''));
+  const card = (lbl, num, sub, color) => `<div class="card"><div class="num" style="color:${color}">${num}</div><div class="lbl">${lbl}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${sub}</div></div>`;
+  const statusRows = j.byStatus.map((s) => `<li><b>${esc(s.my_status || 'untracked').replace(/_/g, ' ')}</b><span>${s.n} leads</span></li>`).join('') || '<li>No status data</li>';
+  $('#analyticsPanel').innerHTML = `
+    <div class="analytics-grid">
+      ${card('Total leads', j.leads, j.campaignName, 'var(--accent)')}
+      ${card('Replied', j.replied, j.sentEmails + ' sent emails', 'var(--green)')}
+      ${card('Reply rate', j.replyRate + '%', 'of all leads replied', 'var(--purple)')}
+      ${card('Open rate', j.openRate + '%', j.openedCount + ' opens', 'var(--amber)')}
+      ${card('Click rate', j.clickRate + '%', j.clicked + ' clicks', 'var(--red)')}
+    </div>
+    <div class="panel"><div class="panel-title"><h2>Leads by status</h2></div><ul class="activity">${statusRows}</ul></div>`;
+}
+
+// ---------- Templates ----------
+async function renderTemplates() {
+  const templates = await api('/api/templates');
+  const list = templates.map((t) => `
+    <div class="template-item">
+      <div class="tuse" onclick="openTemplateEditor('${t.id}')">
+        <b>${esc(t.name)}</b>
+        <div class="cmeta">${esc(t.subject || '(no subject)')} ${t.campaign_id ? '· campaign-linked' : ''} · ${new Date(t.updated_at).toLocaleDateString()}</div>
+      </div>
+      <div class="detail-actions">
+        <button class="btn" onclick="openTemplateEditor('${t.id}')">Edit</button>
+        <button class="btn" onclick="deleteTemplate('${t.id}')">Delete</button>
+      </div>
+    </div>`).join('') || '<div class="empty">No templates yet. Save a great AI reply as a template.</div>';
+  $('#view-templates').innerHTML = `
+    <h1>Reply Templates</h1>
+    <div class="sub">Save and reuse your best replies across campaigns.</div>
+    <div class="panel" style="max-width:720px">
+      <div class="panel-title"><h2>${window._templateEditing ? 'Edit template' : 'New template'}</h2><button class="btn" onclick="resetTemplateForm()">New</button></div>
+      <div class="form-grid">
+        <div class="field"><label>Template name</label><input id="tName" placeholder="e.g. Follow-up after no reply"></div>
+        <div class="field"><label>Linked campaign (optional)</label>
+          <input id="tCampaign" list="campaignList" placeholder="Type a campaign name…">
+          <datalist id="campaignList">${state.campaigns.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>
+        </div>
+        <div class="field full"><label>Subject</label><input id="tSubject" placeholder="Re: {{subject}}"></div>
+        <div class="field full"><label>Body</label><textarea id="tBody" placeholder="Write your reply. Use {{name}} for the lead's first name." style="min-height:120px"></textarea></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn btn-primary" id="saveTemplateBtn">Save template</button>
+      </div>
+    </div>
+    <h2 style="margin:20px 0 10px;font-size:15px">Saved templates</h2>
+    <div>${list}</div>`;
+  $('#saveTemplateBtn').addEventListener('click', async () => {
+    const name = $('#tName').value.trim();
+    const subject = $('#tSubject').value.trim();
+    const body = $('#tBody').value;
+    const campaignName = $('#tCampaign').value.trim();
+    const cmap = {};
+    state.campaigns.forEach(c => cmap[c.name.toLowerCase()] = c.id);
+    const campaignId = cmap[campaignName.toLowerCase()] || null;
+    if (!name || !body) return toast('Template needs a name and body', true);
+    const payload = { name, subject, body, campaign_id: campaignId };
+    if (window._templateEditing) {
+      await api('/api/templates/' + window._templateEditing, { method: 'PUT', body: payload });
+      toast('Template updated');
+    } else {
+      await api('/api/templates', { method: 'POST', body: payload });
+      toast('Template saved');
+    }
+    window._templateEditing = null;
+    renderTemplates();
+  });
+}
+window.openTemplateEditor = async (id) => {
+  const templates = await api('/api/templates');
+  const t = templates.find(x => x.id === id);
+  if (!t) return;
+  window._templateEditing = id;
+  renderTemplates();
+  setTimeout(() => {
+    $('#tName').value = t.name || '';
+    $('#tSubject').value = t.subject || '';
+    $('#tBody').value = t.body || '';
+    if (t.campaign_id) { const c = state.campaigns.find(x => x.id === t.campaign_id); $('#tCampaign').value = c ? c.name : ''; }
+  }, 0);
+};
+window.resetTemplateForm = () => { window._templateEditing = null; renderTemplates(); };
+window.deleteTemplate = async (id) => {
+  if (!confirm('Delete this template?')) return;
+  await api('/api/templates/' + id, { method: 'DELETE' });
+  toast('Template deleted');
+  renderTemplates();
+};
+
+// ---------- Navigation ----------
+function switchView(name) {
+  document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
+  $('#view-' + name).classList.add('active');
+  if (name === 'dashboard') renderDashboard();
+  if (name === 'leads') { renderLeadsHeader(); loadLeads(); }
+  if (name === 'campaigns') renderCampaigns();
+  if (name === 'analytics') renderAnalytics();
+  if (name === 'templates') renderTemplates();
+  if (name === 'settings') renderSettings();
+}
+
+document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => switchView(b.dataset.view)));
+
+function goLeads(status) {
+  state.filters.status = status;
+  state.filters.campaign = 'all';
+  switchView('leads');
+  const chips = $('#fStatus');
+  if (chips) {
+    [...chips.children].forEach((c) => c.classList.toggle('active', c.dataset.v === status));
+  }
+}
+window.goLeads = goLeads;
+window.openLead = openLead;
+window.renderLeads = () => { renderLeadsHeader(); loadLeads(); };
+
+async function pollSync() {
+  try {
+    const st = await api('/api/state');
+    const sync = st.sync;
+    const pill = $('#syncPill');
+    const txt = $('#syncPillText');
+    if (sync.state === 'running') {
+      pill.className = 'sync-pill running';
+      txt.textContent = sync.progress || 'Syncing…';
+    } else if (sync.state === 'error') {
+      pill.className = 'sync-pill error';
+      txt.textContent = 'sync error';
+      pill.title = sync.error;
+      pill.style.cursor = 'pointer';
+      if (sync.error && sync.error !== (window._lastSyncErr || '')) {
+        window._lastSyncErr = sync.error;
+        toast('Sync error: ' + sync.error, true);
+      }
+    } else {
+      window._lastSyncErr = '';
+      pill.className = 'sync-pill ok';
+      txt.textContent = sync.last_sync_at ? 'synced ' + timeAgo(sync.last_sync_at) : 'idle';
+      pill.title = sync.last_sync_summary || '';
+    }
+  } catch { /* server up? */ }
+}
+
+$('#syncBtn').addEventListener('click', async () => {
+  await api('/api/sync', { method: 'POST' });
+  toast('Sync started');
+});
+
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+
+$('#loginBtn').addEventListener('click', submitLogin);
+$('#loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitLogin(); });
+$('#loginUser').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#loginPass').focus(); });
+
+(async function init() {
+  try {
+    await loadCampaigns();
+    await renderDashboard();
+    setInterval(pollSync, 4000);
+    pollSync();
+  } catch (err) {
+    if (!authed) { /* login overlay already shown via api() */ }
+    else toast('Failed to load: ' + err.message, true);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "instantly-crm",
+  "version": "1.0.0",
+  "description": "Simple web CRM for Instantly with AI-assisted replies",
+  "type": "commonjs",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "openai": "^4.77.0",
+    "pg": "^8.13.1"
+  }
+}
