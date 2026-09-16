@@ -173,10 +173,17 @@ app.get('/api/dashboard', async (req, res) => {
     for (const row of (await query('SELECT priority, COUNT(*)::int AS n FROM leads WHERE my_status = ANY($1::text[]) GROUP BY priority', [STATUSES.slice(0, 3)])).rows) {
       priorityCounts[row.priority] = row.n;
     }
+    // Oldest-first by default so the most overdue replies surface rather than being
+    // buried, but newest must stay reachable — a fresh reply is easy to miss otherwise.
+    const attentionSort = req.query.attention_sort === 'newest' ? 'DESC' : 'ASC';
+    const attentionWhere = "reply_count > 0 AND (my_status = ANY($1::text[]) OR my_status IS NULL)";
+    const attentionTotal = (await query(
+      `SELECT COUNT(*)::int AS n FROM leads WHERE ${attentionWhere}`, [['needs_reply', 'follow_up']]
+    )).rows[0].n;
     const attention = (await query(`
       SELECT id, email, first_name, last_name, company_name, campaign_id, my_status, priority, reply_count, last_reply_at, last_touch_at, next_touch_at
-      FROM leads WHERE reply_count > 0 AND (my_status = ANY($1::text[]) OR my_status IS NULL)
-      ORDER BY CASE my_status WHEN 'needs_reply' THEN 0 ELSE 1 END, COALESCE(last_reply_at, last_touch_at) ASC NULLS LAST LIMIT 50
+      FROM leads WHERE ${attentionWhere}
+      ORDER BY CASE my_status WHEN 'needs_reply' THEN 0 ELSE 1 END, COALESCE(last_reply_at, last_touch_at) ${attentionSort} NULLS LAST LIMIT 50
     `, [['needs_reply', 'follow_up']])).rows;
 
     const nowIso = new Date().toISOString();
@@ -195,7 +202,7 @@ app.get('/api/dashboard', async (req, res) => {
     `)).rows;
     const campaignNames = {};
     for (const c of (await query('SELECT id, name FROM campaigns')).rows) campaignNames[c.id] = c.name;
-    res.json({ counts, priorityCounts, attention, followups, followupsDue, recentActivity, campaignNames });
+    res.json({ counts, priorityCounts, attention, attentionTotal, attentionSort: attentionSort === 'DESC' ? 'newest' : 'oldest', followups, followupsDue, recentActivity, campaignNames });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

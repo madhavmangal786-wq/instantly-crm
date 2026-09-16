@@ -354,8 +354,10 @@ async function loadCampaigns() {
 }
 
 // ---------- Dashboard ----------
-async function renderDashboard() {
-  const data = await api('/api/dashboard');
+async function renderDashboard(attentionSort) {
+  const sort = attentionSort || state.attentionSort || 'oldest';
+  state.attentionSort = sort;
+  const data = await api('/api/dashboard?attention_sort=' + encodeURIComponent(sort));
   const c = data.counts;
   const cardColor = { replied: 'var(--accent)', needs_reply: 'var(--red)', follow_up: 'var(--amber)', appointment: 'var(--purple)', done: 'var(--green)' };
   const cards = [
@@ -398,7 +400,14 @@ async function renderDashboard() {
     <div class="sub">Every lead who replied to your outreach — one inbox, one queue.</div>
     <div class="cards">${cards}</div>
     <div class="panel">
-      <div class="panel-title"><h2>Replied leads — awaiting your reply</h2><div class="detail-actions"><button class="btn" onclick="goLeads('needs_reply')">Open full queue →</button><span class="hint" style="color:var(--muted);font-size:12px">Priority: ${prioLine}</span></div></div>
+      <div class="panel-title"><h2>Replied leads — awaiting your reply</h2><div class="detail-actions">
+        <select id="attentionSort" title="Which end of the queue to show">
+          <option value="oldest" ${data.attentionSort !== 'newest' ? 'selected' : ''}>Most overdue first</option>
+          <option value="newest" ${data.attentionSort === 'newest' ? 'selected' : ''}>Newest replies first</option>
+        </select>
+        <button class="btn" onclick="goLeads('needs_reply')">Open full queue →</button>
+        <span class="hint" style="color:var(--muted);font-size:12px">Priority: ${prioLine}</span></div></div>
+      ${(data.attentionTotal > data.attention.length) ? `<div class="hint" style="color:var(--muted);font-size:12px;margin-bottom:8px">Showing ${data.attention.length} of ${data.attentionTotal} — flip the sort or open the full queue to see the rest.</div>` : ''}
       ${att ? `<table><thead><tr><th>Lead</th><th>Campaign</th><th>Status</th><th>Priority</th><th>Last activity</th></tr></thead><tbody>${att}</tbody></table>` : '<div class="empty">Nothing needs attention. Nice.</div>'}
     </div>
     <div class="panel">
@@ -409,6 +418,8 @@ async function renderDashboard() {
       <div class="panel-title"><h2>Recent activity</h2></div>
       ${act ? `<ul class="activity">${act}</ul>` : '<div class="empty">No activity yet.</div>'}
     </div>`;
+  const sortSel = $('#attentionSort');
+  if (sortSel) sortSel.addEventListener('change', () => renderDashboard(sortSel.value));
 }
 
 // ---------- Leads ----------
