@@ -8,3 +8,5 @@ backups/
 # Database credentials — never commit these
 dbpass.txt
 dbpass.txt.save
+# Local editor/agent tooling
+.claude/
