@@ -24,7 +24,9 @@ function sqliteType(v) {
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(20);
   const s = String(v);
   if (s.includes('\n') || s.includes('\r') || s.includes('\\')) {
-    const esc = s.replace(/'/g, "''").replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\\n');
+    // Backslashes must be escaped first: inside E'...' Postgres decodes \n, \", \t etc., so an
+    // unescaped JSON escape like \n turns into a real newline and the stored JSON is invalid.
+    const esc = s.replace(/\\/g, '\\\\').replace(/'/g, "''").replace(/\r/g, '\\r').replace(/\n/g, '\\n');
     return "E'" + esc + "'";
   }
   return "'" + s.replace(/'/g, "''") + "'";
