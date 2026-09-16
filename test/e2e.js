@@ -342,6 +342,15 @@ async function main() {
   const l6 = (await api('/api/leads/lead-006')).json.lead;
   check('manually-set priority is not clobbered back to high by the next sync', l6.priority === 'low', `got ${l6.priority}`);
 
+  console.log('\n7h) send still works when stored raw JSON is unreadable — regression for "No sending account found"');
+  await pgClient.query("UPDATE emails SET raw = '{not valid json' WHERE lead_id = 'lead-001'");
+  const corruptDraft = await insertDraft('lead-001', 'Re: after corruption', 'Sent despite unreadable raw', new Date().toISOString());
+  const sentBefore = repliesSent.length;
+  r = await api(`/api/drafts/${corruptDraft}/send`, { method: 'POST' });
+  check('send succeeds with every raw payload in the thread unreadable', r.status === 200, JSON.stringify(r.json));
+  const lastReply = repliesSent[repliesSent.length - 1];
+  check('falls back to the stored sending account', repliesSent.length === sentBefore + 1 && lastReply.eaccount === 'you@outbound.com', JSON.stringify(lastReply));
+
   console.log('\n8) campaign context save + refresh');
   r = await api('/api/campaigns/camp-1/context', { method: 'PUT', body: { offer: 'AI phone agents for SMBs', icp: '10-50 employees', tone: 'casual', faqs: 'Q: cost?', notes: 'demo > call' } });
   check('context saved', r.status === 200);

@@ -521,9 +521,8 @@ app.post('/api/drafts/:id/send', async (req, res) => {
     if (!replyToUuid) {
       return res.status(400).json({ error: 'No email found to reply to. Add the lead to a campaign first.' });
     }
-    const rawOf = (e) => { try { return e && e.raw ? JSON.parse(e.raw) : null; } catch { return null; } };
     const targetEmail = lastReceived || lastEmail;
-    const account = draft.eaccount || (rawOf(targetEmail) || {}).eaccount;
+    const account = draft.eaccount || sendingAccountFor(thread, targetEmail);
     if (!account) return res.status(400).json({ error: 'No sending account found for this email thread.' });
 
     const client = await api(await getSetting('instantly_base_url', DEFAULT_BASE));
@@ -618,6 +617,23 @@ app.post('/api/push/test', async (req, res) => {
     res.json({ ok: true, ...r });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// The Instantly account a thread is sent from. The raw API payload is preferred, but it
+// can be unreadable (rows migrated with broken escaping), so fall back to the plain
+// columns: a sent email's from_email is unambiguously ours; a received email's first
+// to_email recipient is the account the lead replied to.
+function sendingAccountFor(thread, target) {
+  const firstAddress = (v) => String(v || '').split(/[,;]/)[0].trim() || null;
+  const fromRaw = (e) => {
+    try { const j = JSON.parse(e.raw); return (j && j.eaccount) || null; } catch { return null; }
+  };
+  const lastSent = thread.find((e) => e.direction === 'sent' && e.from_email);
+  return (target && fromRaw(target))
+    || thread.map(fromRaw).find(Boolean)
+    || (lastSent && firstAddress(lastSent.from_email))
+    || (target && target.direction === 'received' && firstAddress(target.to_email))
+    || null;
+}
 
 function stripRaw(obj) {
   if (!obj) return obj;
