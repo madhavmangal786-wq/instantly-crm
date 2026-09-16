@@ -1,14 +1,27 @@
+// Take over immediately on update, so a fixed worker replaces an old one without
+// waiting for every tab to close.
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { /* non-JSON payload, ignore */ }
   const title = data.title || 'Instantly CRM';
+  // Chrome does not render SVG notification icons — these must be raster (PNG).
   const options = {
     body: data.body || 'You have a new update.',
-    icon: '/icon.svg',
-    badge: '/icon.svg',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: 'instantly-crm-reply',
+    renotify: true,
     data: { url: data.url || '/' },
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    self.registration.showNotification(title, options).catch(() =>
+      // If anything about the rich notification is rejected, still surface something.
+      self.registration.showNotification(title, { body: options.body })
+    )
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {

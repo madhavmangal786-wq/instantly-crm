@@ -1035,6 +1035,7 @@ async function renderSettings() {
       <div class="row" style="gap:8px">
         <button class="btn btn-primary" id="enablePush">🔔 Enable notifications on this device</button>
         <button class="btn" id="testPush">Send test notification</button>
+        <button class="btn" id="testLocalPush" title="Fires a notification directly on this device, skipping the push network — isolates display problems from delivery problems">Test on this device only</button>
         <span class="hint" id="pushResult" style="color:var(--muted);font-size:12px"></span>
       </div>
     </div>
@@ -1102,10 +1103,22 @@ async function renderSettings() {
   $('#testPush').addEventListener('click', async () => {
     try {
       const r = await api('/api/push/test', { method: 'POST' });
-      $('#pushResult').textContent = `Sent to ${r.sent}/${r.total} device(s).`;
+      $('#pushResult').textContent = `Handed to the push service for ${r.sent}/${r.total} device(s). If nothing appears, try "Test on this device only".`;
     } catch (err) {
       $('#pushResult').textContent = '';
       toast(err.message, true);
+    }
+  });
+  $('#testLocalPush').addEventListener('click', async () => {
+    const out = $('#pushResult');
+    try {
+      if (Notification.permission !== 'granted') { out.textContent = `Permission is "${Notification.permission}" — enable notifications first.`; return; }
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) { out.textContent = 'No service worker registered on this device yet — tap Enable first.'; return; }
+      await reg.showNotification('Local test', { body: 'Shown directly by this device.', icon: '/icon-192.png' });
+      out.textContent = 'Local notification fired. If you see it, display works and the issue is push delivery.';
+    } catch (err) {
+      out.textContent = 'Local notification failed: ' + err.message;
     }
   });
 }
