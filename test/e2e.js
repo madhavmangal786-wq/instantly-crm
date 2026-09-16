@@ -66,6 +66,7 @@ const EMAILS = [
 
 const repliesSent = [];
 const emailCalls = [];
+let mockAccounts = [{ email: 'you@outbound.com', status: 1 }];
 
 const mock = http.createServer((req, res) => {
   const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
@@ -104,7 +105,11 @@ const mock = http.createServer((req, res) => {
       if (after) items = items.filter((e) => e.id > after);
       return send(200, { items, next_starting_after: null });
     }
+    if (url.pathname === '/api/v2/accounts' && req.method === 'GET') {
+      return send(200, { items: mockAccounts, next_starting_after: null });
+    }
     if (url.pathname === '/api/v2/emails/reply' && req.method === 'POST') {
+      if (!mockAccounts.some((a) => a.email === body.eaccount)) return send(404, { message: 'Email account not found' });
       repliesSent.push(body);
       return send(200, { id: 'email-reply-' + repliesSent.length, ...body, timestamp_email: new Date().toISOString() });
     }
@@ -350,6 +355,16 @@ async function main() {
   check('send succeeds with every raw payload in the thread unreadable', r.status === 200, JSON.stringify(r.json));
   const lastReply = repliesSent[repliesSent.length - 1];
   check('falls back to the stored sending account', repliesSent.length === sentBefore + 1 && lastReply.eaccount === 'you@outbound.com', JSON.stringify(lastReply));
+
+  console.log('\n7i) sending from a mailbox no longer connected to Instantly gives a clear, actionable error');
+  mockAccounts = [{ email: 'someone-else@outbound.com', status: 1 }];
+  const orphanDraft = await insertDraft('lead-001', 'Re: disconnected', 'Should not send', new Date().toISOString());
+  const sentBeforeOrphan = repliesSent.length;
+  r = await api(`/api/drafts/${orphanDraft}/send`, { method: 'POST' });
+  check('send is refused', r.status === 400, `${r.status}`);
+  check('error names the mailbox and says to reconnect it', /you@outbound\.com/.test(r.json.error || '') && /no longer connected/i.test(r.json.error || ''), JSON.stringify(r.json));
+  check('nothing reached Instantly', repliesSent.length === sentBeforeOrphan);
+  mockAccounts = [{ email: 'you@outbound.com', status: 1 }];
 
   console.log('\n8) campaign context save + refresh');
   r = await api('/api/campaigns/camp-1/context', { method: 'PUT', body: { offer: 'AI phone agents for SMBs', icp: '10-50 employees', tone: 'casual', faqs: 'Q: cost?', notes: 'demo > call' } });

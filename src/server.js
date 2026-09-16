@@ -32,6 +32,8 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const STATUSES = ['needs_reply', 'follow_up', 'appointment', 'done'];
 const PRIORITIES = ['high', 'normal', 'low'];
+// Instantly account status codes, per its API reference.
+const ACCOUNT_STATUS_LABELS = { 1: 'Active', 2: 'Paused', 3: 'Paused for maintenance', '-1': 'Connection Error', '-2': 'Soft Bounce Error', '-3': 'Sending Error' };
 const INTEREST_TO_MY_STATUS = { 2: 'appointment', 3: 'appointment', 4: 'done', '-1': 'done', '-3': 'done', '-4': 'done' };
 
 // ---- Login protection (built-in) ----
@@ -138,8 +140,13 @@ app.post('/api/test-connections', async (req, res) => {
     const client = await api(await getSetting('instantly_base_url', DEFAULT_BASE));
     const { items } = await client.campaigns(1);
     results.instantly = { ok: true, detail: items && items.length ? `Connected — found ${items.length} campaign` : 'Connected (no campaigns)' };
+    const mailboxes = await client.accounts();
+    const unhealthy = mailboxes.filter((a) => a.status !== 1);
+    results.mailboxes = unhealthy.length === 0
+      ? { ok: true, detail: `${mailboxes.length} mailbox(es), all active` }
+      : { ok: false, detail: `${unhealthy.length} of ${mailboxes.length} mailboxes can't send: ` + unhealthy.map((a) => `${a.email} (${ACCOUNT_STATUS_LABELS[a.status] || a.status})`).join(', ') };
   } catch (err) {
-    results.instantly = { ok: false, detail: err.message };
+    results.instantly = results.instantly || { ok: false, detail: err.message };
   }
   try {
     const OpenAI = require('openai');
@@ -531,7 +538,26 @@ app.post('/api/drafts/:id/send', async (req, res) => {
     if (body !== draft.body || subject !== draft.subject) {
       await query('UPDATE drafts SET subject = $1, body = $2 WHERE id = $3', [subject, body, draft.id]);
     }
-    await client.reply({ replyToUuid, eaccount: account, subject, body });
+    // Instantly only replies from mailboxes that are still connected. Check first so the
+    // user gets an actionable message instead of a raw "Email account not found".
+    let mailbox;
+    let lookedUp = false;
+    try {
+      mailbox = (await client.accounts()).find((a) => String(a.email).toLowerCase() === account.toLowerCase());
+      lookedUp = true;
+    } catch { /* lookup is advisory; if it fails, let the send itself decide */ }
+    if (lookedUp && !mailbox) {
+      return res.status(400).json({ error: `This conversation was sent from ${account}, which is no longer connected to Instantly. Reconnect it in Instantly → Email Accounts, then send again.` });
+    }
+    try {
+      await client.reply({ replyToUuid, eaccount: account, subject, body });
+    } catch (err) {
+      const label = mailbox && ACCOUNT_STATUS_LABELS[mailbox.status];
+      if (label && mailbox.status !== 1) {
+        throw new Error(`${account} is connected but Instantly reports it as "${label}". Fix it in Instantly → Email Accounts, then send again. (${err.message})`);
+      }
+      throw err;
+    }
     await query('UPDATE drafts SET status = $1, sent_at = $2, eaccount = $3, reply_to = $4 WHERE id = $5',
       ['sent', new Date().toISOString(), account, replyToUuid, draft.id]);
     const nextStatus = ['appointment', 'done'].includes(lead.my_status) ? lead.my_status : 'follow_up';

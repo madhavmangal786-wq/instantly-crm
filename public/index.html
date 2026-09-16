@@ -1067,7 +1067,10 @@ async function renderSettings() {
       const ai = r.results && r.results.ai;
       parts.push(inst ? (inst.ok ? '✓ Instantly OK' : '✗ Instantly: ' + inst.detail) : '');
       parts.push(ai ? (ai.ok ? '✓ AI OK' : '✗ AI: ' + ai.detail) : '');
+      const mb = r.results && r.results.mailboxes;
+      parts.push(mb ? (mb.ok ? '✓ ' + mb.detail : '✗ ' + mb.detail) : '');
       out.textContent = parts.filter(Boolean).join('  ·  ');
+      if (mb && !mb.ok) toast('Some mailboxes cannot send — ' + mb.detail, true);
       if (inst && !inst.ok) toast('Instantly connection failed — ' + inst.detail, true);
       if (ai && !ai.ok) toast('AI connection failed — ' + ai.detail, true);
     } catch (err) {

@@ -65,6 +65,17 @@ async function api(base = DEFAULT_BASE) {
       const params = { limit, campaign_id: campaignId, lead, starting_after: startingAfter, min_timestamp_created: minTimestamp };
       return fetchJson(base, key, 'GET', '/api/v2/emails', { params });
     },
+    async accounts() {
+      const all = [];
+      let cursor;
+      for (let i = 0; i < 20; i++) {
+        const page = await fetchJson(base, key, 'GET', '/api/v2/accounts', { params: { limit: 100, starting_after: cursor } });
+        all.push(...(page.items || []));
+        if (!page.next_starting_after) break;
+        cursor = page.next_starting_after;
+      }
+      return all;
+    },
     async reply({ replyToUuid, eaccount, subject, body }) {
       return fetchJson(base, key, 'POST', '/api/v2/emails/reply', {
         body: { reply_to_uuid: replyToUuid, eaccount, subject, body: { text: body } },
