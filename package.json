@@ -12,8 +12,10 @@
     "node": ">=22.5.0"
   },
   "dependencies": {
+    "embedded-postgres": "^18.4.0-beta.17",
     "express": "^4.21.2",
     "openai": "^4.77.0",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "web-push": "^3.6.7"
   }
 }

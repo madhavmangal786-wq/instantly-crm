@@ -16,7 +16,7 @@ A minimal web CRM that syncs with your Instantly workspace and lets you reply to
 
 - Node.js >= 22.5
 - Instantly API key (Instantly → Settings → API Keys; needs `leads:read`, `emails:read`, `emails:create`, `campaigns:read` scopes)
-- OpenAI API key (used only to generate drafts)
+- An OpenAI-compatible API key (used only to generate drafts). Defaults to [OpenCode Zen](https://opencode.ai/zen), but as of writing its free-tier models reject requests from outside OpenCode's own client ("free tier can only be used in OpenCode") — you'll need either a payment method on that account to use its paid models, or to point Settings → AI reply engine at a different OpenAI-compatible provider (OpenAI, Anthropic via a compatible proxy, Groq, etc.) with its own key and base URL.
 
 ## Run
 
@@ -27,7 +27,7 @@ npm start        # http://localhost:3000
 
 Open the app, go to **Settings**, paste your Instantly and OpenAI keys, and hit **Sync now**. Then set up context on each campaign (Campaigns tab) — the AI uses it to write replies.
 
-Keys are stored locally in `data/crm.db` on your machine only.
+Keys are stored in the CRM's own database — an embedded local Postgres instance under `data/pg-data` by default, or your hosted Postgres/Supabase database if you set `DATABASE_URL`.
 
 ## Notes
 

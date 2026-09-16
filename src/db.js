@@ -1,31 +1,74 @@
 const { Pool } = require('pg');
 
 // === Connection ===
-// Prefer a full Postgres connection string; fall back to discrete env vars.
+// Prefer a full Postgres connection string; fall back to discrete env vars;
+// if nothing is set, spin up an embedded PostgreSQL instance.
 const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.SUPABASE_URL;
 
 let pool;
-if (connectionString) {
-  pool = new Pool({ connectionString, ssl: process.env.PGSSL === 'false' ? false : { rejectUnauthorized: false } });
-} else {
-  pool = new Pool({
-    host: process.env.PGHOST || 'localhost',
-    port: parseInt(process.env.PGPORT || '5432', 10),
-    database: process.env.PGDATABASE || 'instantly_crm',
-    user: process.env.PGUSER || process.env.USER,
-    password: process.env.PGPASSWORD || undefined,
-    ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : false,
+let embeddedPg = null;
+
+async function ensureDb() {
+  if (pool) return;
+  if (connectionString) {
+    pool = new Pool({ connectionString, ssl: process.env.PGSSL === 'false' ? false : { rejectUnauthorized: false } });
+    return attachPool();
+  }
+  // Try discrete env vars first
+  if (process.env.PGHOST) {
+    pool = new Pool({
+      host: process.env.PGHOST,
+      port: parseInt(process.env.PGPORT || '5432', 10),
+      database: process.env.PGDATABASE || 'instantly_crm',
+      user: process.env.PGUSER || process.env.USER,
+      password: process.env.PGPASSWORD || undefined,
+      ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : false,
+    });
+    return attachPool();
+  }
+  // Spin up embedded PostgreSQL (ESM module loaded via dynamic import)
+  const { default: EmbeddedPostgres } = await import('embedded-postgres');
+  const port = parseInt(process.env.PGPORT || '5433', 10);
+  const pgUser = 'postgres';
+  const pgPass = 'postgres';
+  const fs = require('node:fs');
+  const baseDataDir = process.env.CRM_DATA_DIR || require('node:path').join(__dirname, '..', 'data');
+  const dataDir = require('node:path').join(baseDataDir, 'pg-data');
+  embeddedPg = new EmbeddedPostgres({
+    databaseDir: dataDir,
+    port,
+    user: pgUser,
+    password: pgPass,
   });
+  console.log('[db] Starting embedded PostgreSQL...');
+  if (!fs.existsSync(require('node:path').join(dataDir, 'PG_VERSION'))) {
+    await embeddedPg.initialise();
+  }
+  await embeddedPg.start();
+  const dbName = 'instantly_crm';
+  try { await embeddedPg.createDatabase(dbName); } catch (err) { /* db already exists */ }
+  pool = new Pool({ host: 'localhost', port, database: dbName, user: pgUser, password: pgPass });
+  attachPool();
+  console.log(`[db] Embedded PostgreSQL running on port ${port}`);
 }
 
-pool.on('error', (err) => console.error('[db] idle client error:', err.message));
+function attachPool() {
+  if (pool) pool.on('error', (err) => console.error('[db] idle client error:', err.message));
+}
+
+// Stop the embedded Postgres cleanly so it doesn't leave a stale postmaster.pid
+// lock file (or an orphaned process) behind when the app is stopped.
+async function shutdownDb() {
+  if (embeddedPg) {
+    try { await embeddedPg.stop(); } catch (err) { console.error('[db] error stopping embedded Postgres:', err.message); }
+  }
+}
 
 // Small convenience wrappers. All SQL in this app uses $1-style placeholders.
 const query = (text, params = []) => pool.query(text, params);
 
 // === Schema ===
-async function initSchema() {
-  await query(`
+const SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
       value TEXT
@@ -68,9 +111,11 @@ async function initSchema() {
       raw              TEXT,
       updated_at       TEXT,
       manual_override  INTEGER DEFAULT 0,
+      priority_manual  INTEGER DEFAULT 0,
       last_email_fetch_at TEXT,
       next_touch_at    TEXT,
-      notes            TEXT DEFAULT ''
+      notes            TEXT DEFAULT '',
+      deal_value       NUMERIC DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_leads_campaign ON leads(campaign_id);
     CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email);
@@ -126,7 +171,20 @@ async function initSchema() {
       created_at  TEXT,
       updated_at  TEXT
     );
-  `);
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id         SERIAL PRIMARY KEY,
+      endpoint   TEXT UNIQUE,
+      p256dh     TEXT,
+      auth       TEXT,
+      created_at TEXT
+    );
+`;
+
+async function initSchema() {
+  await query(SCHEMA_SQL);
+  // Migrations for databases created before these columns existed.
+  await query('ALTER TABLE leads ADD COLUMN IF NOT EXISTS priority_manual INTEGER DEFAULT 0');
+  await query('ALTER TABLE leads ADD COLUMN IF NOT EXISTS deal_value NUMERIC DEFAULT 0');
 }
 
 async function markStaleDrafts() {
@@ -153,4 +211,4 @@ async function logActivity({ leadId, campaignId, type, detail, at }) {
   );
 }
 
-module.exports = { query, pool, initSchema, markStaleDrafts, getSetting, setSetting, logActivity };
+module.exports = { query, pool, initSchema, markStaleDrafts, getSetting, setSetting, logActivity, ensureDb, shutdownDb, SCHEMA_SQL };

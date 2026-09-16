@@ -15,19 +15,25 @@ Rules:
 Return ONLY a JSON object with this shape:
 {"subject": "...", "body": "...", "priority": "high"|"normal"|"low", "status": "needs_reply"|"follow_up"|"appointment"|"done"}`;
 
+// 'hy3-free' and 'laguna-s-2.1-free' have been retired by the provider (no longer
+// in its model catalog at all). Note: as of writing, OpenCode Zen's free-tier models
+// also reject requests from outside their own client ("free tier can only be used in
+// OpenCode"), so even these may not work with a plain API key — see README.
 const FREE_MODELS = [
-  'hy3-free', 'deepseek-v4-flash-free', 'mimo-v2.5-free',
-  'laguna-s-2.1-free', 'nemotron-3-ultra-free', 'nemotron-3.5-lightning-free', 'big-pickle',
+  'deepseek-v4-flash-free', 'mimo-v2.5-free',
+  'nemotron-3-ultra-free', 'nemotron-3.5-lightning-free', 'big-pickle',
 ];
+const DEFAULT_OPENAI_BASE_URL = 'https://opencode.ai/zen/v1';
+const DEFAULT_OPENAI_MODEL = 'deepseek-v4-flash-free';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let lastWorkingModel = null;
 
-function getClient() {
-  const key = getSetting('openai_api_key', '');
+async function getClient() {
+  const key = await getSetting('openai_api_key', '');
   if (!key) throw new Error('AI API key is not set. Add it in Settings.');
-  const baseUrl = getSetting('openai_base_url', 'https://opencode.ai/zen/v1');
-  const model = getSetting('openai_model', 'laguna-s-2.1-free');
-  return { client: new OpenAI({ apiKey: key, baseURL: baseUrl, timeout: 45000 }), model };
+  const baseUrl = await getSetting('openai_base_url', DEFAULT_OPENAI_BASE_URL);
+  const model = await getSetting('openai_model', DEFAULT_OPENAI_MODEL);
+  return { client: new OpenAI({ apiKey: key, baseURL: baseUrl || undefined, timeout: 45000 }), model };
 }
 
 async function pingModel(client, model) {
@@ -36,7 +42,7 @@ async function pingModel(client, model) {
       {
         model,
         temperature: 0,
-        max_tokens: 20,
+        max_tokens: 60, // reasoning models spend tokens "thinking" before the answer
         messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
       },
       { timeout: 6000 }
@@ -48,7 +54,7 @@ async function pingModel(client, model) {
 }
 
 async function pickModel(client, configured) {
-  const cached = lastWorkingModel || getSetting('ai_working_model', '');
+  const cached = lastWorkingModel || (await getSetting('ai_working_model', ''));
   const candidates = [cached, configured, ...FREE_MODELS]
     .filter((m, i, a) => m && a.indexOf(m) === i);
   for (const m of candidates) {
@@ -153,7 +159,7 @@ function ensureSignature(body, name) {
 }
 
 async function generateReply({ campaign, lead, thread, senderName, instruction, draftText }) {
-  const { client, model } = getClient();
+  const { client, model } = await getClient();
   const userPrompt = await buildPrompt(campaign, lead, thread, senderName);
   const draftSection = draftText
     ? `\n\nCURRENT DRAFT (improve/rewrite this based on the instruction — keep what works):\n${draftText}`
@@ -197,4 +203,4 @@ async function generateReply({ campaign, lead, thread, senderName, instruction, 
   );
 }
 
-module.exports = { generateReply, deriveSenderName, ensureSignature };
+module.exports = { generateReply, deriveSenderName, ensureSignature, DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_MODEL };

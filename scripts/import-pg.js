@@ -24,8 +24,13 @@ async function main() {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
   console.log('Connecting to Postgres…');
-  const client = new Client({ connectionString: conn, ssl: { rejectUnauthorized: false } });
+  const ssl = process.env.PGSSL === 'false' ? false : { rejectUnauthorized: false };
+  const client = new Client({ connectionString: conn, ssl });
   await client.connect();
+
+  // Ensure tables exist (idempotent) before truncating — works on a fresh Supabase DB.
+  const { SCHEMA_SQL } = require('../src/db');
+  await client.query(SCHEMA_SQL);
 
   // Disable FK-style safety by truncating in dependency order before import.
   // Tables only reference by TEXT ids (no real FK constraints enforced), so order is cosmetic.
@@ -35,6 +40,7 @@ async function main() {
   }
 
   console.log('Importing tables…');
+  const BATCH = parseInt(process.env.CRM_BATCH || '200', 10);
   for (const t of order) {
     const info = manifest[t];
     if (!info) continue;
@@ -42,13 +48,34 @@ async function main() {
     if (!fs.existsSync(file)) { console.warn(`  ${t}: no sql file`); continue; }
     const sql = fs.readFileSync(file, 'utf8');
     if (!sql.trim()) { console.log(`  ${t}: 0 rows (empty)`); continue; }
-    // Run statements sequentially so we can count via rowCount.
+    // Combine rows into a few large multi-row INSERTs (single round-trip each),
+    // instead of one round-trip per row. Each exported line is one row and uses
+    // the same column list, so we can reconstruct batches from the column prefix.
+    const cols = info.columns.map((c) => `"${c}"`).join(', ');
+    const prefixNoParen = `INSERT INTO "${t}" (${cols}) VALUES `;
+    const prefix = `${prefixNoParen}(`;
+    const tuples = sql.split('\n').filter((l) => l.trim().startsWith('INSERT'))
+      .map((l) => l.slice(prefix.length, l.endsWith(');') ? -2 : -1));
     let inserted = 0;
-    for (const stmt of sql.split('\n').filter((l) => l.trim().startsWith('INSERT'))) {
-      const r = await client.query(stmt);
+    for (let i = 0; i < tuples.length; i += BATCH) {
+      const chunk = tuples.slice(i, i + BATCH).map((tu) => `(${tu})`).join(', ');
+      const r = await client.query(`${prefixNoParen}${chunk};`);
       inserted += r.rowCount;
+      process.stdout.write(`  ${t}: ${inserted}/${info.count}\r`);
     }
     console.log(`  ${t}: inserted ${inserted} (source ${info.count})`);
+  }
+
+  // TRUNCATE ... RESTART IDENTITY resets each SERIAL sequence to 1, but the rows we just
+  // inserted use their original explicit ids — so the sequence must be advanced past the
+  // real max id, or the next INSERT (with no id given) will collide with an existing row.
+  console.log('\nRealigning SERIAL sequences to imported data…');
+  for (const t of ['activity_log', 'drafts', 'templates']) {
+    if (!manifest[t]) continue;
+    const r = await client.query(
+      `SELECT setval(pg_get_serial_sequence('${t}', 'id'), COALESCE((SELECT MAX(id) FROM "${t}"), 1), (SELECT MAX(id) IS NOT NULL FROM "${t}"))`
+    );
+    console.log(`  ${t}: sequence set to ${r.rows[0].setval}`);
   }
 
   console.log('\n=== VERIFICATION (zero-loss check) ===');

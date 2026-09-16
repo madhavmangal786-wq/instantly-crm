@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Instantly CRM</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg">
+<meta name="theme-color" content="#2563eb">
 <style>
   :root {
     --bg: #f6f7f9;
@@ -77,6 +80,9 @@
   .panel-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
   .panel-title h2 { margin: 0; }
   table { width: 100%; border-collapse: collapse; }
+  @media (max-width: 700px) {
+    table { display: block; overflow-x: auto; }
+  }
   th {
     text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
     color: var(--muted); padding: 6px 10px; border-bottom: 1px solid var(--border);
@@ -201,7 +207,7 @@
   .ctx-banner button { margin-top: 8px; }
   @media (max-width: 700px) {
     header { flex-wrap: wrap; }
-    nav { order: 3; width: 100%; }
+    nav { order: 3; width: 100%; flex-wrap: wrap; }
     .form-grid { grid-template-columns: 1fr; }
   }
 </style>
@@ -578,9 +584,15 @@ function cleanBody(text) {
   let t = String(text).replace(/\r\n/g, '\n');
   t = t.split(/\n\s*On .+ wrote:\s*\n/i)[0];
   t = t.split(/\n\s*-{2,} ?Original Message ?-{2,}\s*\n/i)[0];
+  t = t.split(/\n\s*_{5,}\s*\n/)[0]; // Outlook's quoted-thread separator
   t = t.split(/\n\s*From: .+\n\s*Sent: .+\n\s*To: .+\n(?:(?:.*\n){0,4}Subject: .+\n)?/i)[0];
   t = t.split(/\n\s*Begin forwarded message[:\s]*\n/i)[0];
-  const lines = t.split('\n').filter((ln) => !/^\s*>/.test(ln));
+  // Cut at the start of a likely signature block: a bracketed banner/logo line,
+  // a "P:"/"F:" phone or fax line, or an explicit disclaimer marker.
+  t = t.split(/\n(?=\s*(?:\[[^\n\]]+\]\s*$|P\s*:\s*[+\d][\d()\-.\s]{5,}\s*$|F\s*:\s*[+\d][\d()\-.\s]{5,}\s*$|disclaimer\s*:))/im)[0];
+  const lines = t.split('\n')
+    .filter((ln) => !/^\s*>/.test(ln))
+    .filter((ln) => !/^\s*\[cid:[^\]]+\]\s*$/i.test(ln)); // embedded-image placeholders
   t = lines.join('\n').replace(/\n\s*[-_]{3,}\s*\n/g, '\n');
   return t.trim();
 }
@@ -672,6 +684,8 @@ async function openLead(id) {
         <input type="date" id="lFollowUp" title="Schedule a follow-up reminder" value="${l.next_touch_at ? l.next_touch_at.slice(0,10) : ''}">
         <button class="btn" id="lFollowUpBtn" title="Schedule follow-up">Follow-up</button>
         <button class="btn" id="lClearFollowUp" title="Clear follow-up" ${l.next_touch_at ? '' : 'style="display:none"'}>Clear</button>
+        <input type="number" id="lDealValue" title="Deal value, if this lead closed" placeholder="Deal value $" min="0" step="1" style="width:130px" value="${l.deal_value && Number(l.deal_value) > 0 ? Number(l.deal_value) : ''}">
+        <button class="btn" id="lDealValueBtn" title="Save deal value">Save value</button>
       </div>
     </div>
     <div class="panel">
@@ -704,14 +718,24 @@ async function openLead(id) {
     toast('Status updated — your choice is kept, sync won\'t override it');
   });
   $('#lPriority').addEventListener('change', async () => {
-    await api(`/api/leads/${l.id}/priority`, { method: 'POST', body: { priority: $('#lPriority').value } });
-    l.priority = $('#lPriority').value;
-    $('#convBadges').innerHTML = badge(l.my_status) + ' ' + pbadge(l.priority);
-    toast('Priority updated');
+    const v = $('#lPriority').value;
+    try {
+      await api(`/api/leads/${l.id}/priority`, { method: 'POST', body: { priority: v } });
+      l.priority = v;
+      $('#convBadges').innerHTML = badge(l.my_status) + ' ' + pbadge(l.priority);
+      toast('Priority updated');
+    } catch (err) {
+      $('#lPriority').value = l.priority || 'normal';
+      toast(err.message, true);
+    }
   });
   $('#lInterest').addEventListener('change', async () => {
     const v = $('#lInterest').value;
     if (!v) return;
+    if (!confirm(`Set interest to "${INTEREST_LABELS[v]}" for ${l.email}?\n\nThis pushes a real change to Instantly immediately — it can't be undone with a click.`)) {
+      $('#lInterest').value = '';
+      return;
+    }
     try {
       const r = await api(`/api/leads/${l.id}/interest`, { method: 'POST', body: { interest: v } });
       toast(`Interest set to ${INTEREST_LABELS[v]} in Instantly`);
@@ -743,6 +767,13 @@ async function openLead(id) {
     $('#lClearFollowUp').style.display = 'none';
     toast('Follow-up cleared');
   });
+  $('#lDealValueBtn').addEventListener('click', async () => {
+    const v = $('#lDealValue').value;
+    try {
+      await api(`/api/leads/${l.id}/deal-value`, { method: 'POST', body: { value: v || 0 } });
+      toast('Deal value saved');
+    } catch (err) { toast(err.message, true); }
+  });
   renderComposer(l, data.thread, data.draft);
 }
 
@@ -750,7 +781,6 @@ function renderComposer(lead, thread, draft) {
   const el = $('#composer');
   const key = lead.id;
   const unsaved = composerUnsaved[key] || { subject: '', body: '' };
-  composerUnsaved[key] = { subject: '', body: '' };
   const initialSubject = unsaved.subject || (draft ? draft.subject : '');
   const initialBody = unsaved.body || (draft ? draft.body : '');
   el.innerHTML = `
@@ -801,16 +831,18 @@ function renderComposer(lead, thread, draft) {
       discardBtn.disabled = false;
       tmplBtn.disabled = false;
       if (d.priority && d.priority !== (lead.priority || 'normal')) {
-        lead.priority = d.priority;
-        $('#lPriority').value = d.priority;
-        $('#convBadges').innerHTML = badge(lead.my_status) + ' ' + pbadge(d.priority);
-        toast(`AI suggests priority: ${PRIORITY_META[d.priority][0]} — applied`);
+        try {
+          await api(`/api/leads/${lead.id}/priority`, { method: 'POST', body: { priority: d.priority } });
+          lead.priority = d.priority;
+          $('#lPriority').value = d.priority;
+          $('#convBadges').innerHTML = badge(lead.my_status) + ' ' + pbadge(d.priority);
+          toast(`AI suggests priority: ${PRIORITY_META[d.priority][0]} — applied`);
+        } catch (err) { toast(`AI suggests priority: ${PRIORITY_META[d.priority][0]} (couldn't save: ${err.message})`, true); }
       }
       if (d.status && d.status !== lead.my_status) {
-        lead.my_status = d.status;
-        $('#lStatus').value = d.status;
-        $('#convBadges').innerHTML = badge(d.status) + ' ' + pbadge(lead.priority);
-        toast(`AI suggests status: ${STATUS_META[d.status][0]} — applied`);
+        // Not persisted automatically — changing status marks it as a manual override,
+        // which would stop future syncs (e.g. a real Instantly interest change) from updating it.
+        toast(`AI suggests status: ${STATUS_META[d.status][0]} — select it above if you agree`);
       }
     } catch (err) {
       toast(err.message, true);
@@ -848,6 +880,7 @@ function renderComposer(lead, thread, draft) {
     sendBtn.textContent = 'Sending…';
     try {
       await api(`/api/drafts/${draftId}/send`, { method: 'POST', body: { subject: $('#dSubject').value, body: $('#dBody').value } });
+      delete composerUnsaved[key];
       toast('Reply sent through Instantly');
       openLead(lead.id);
     } catch (err) {
@@ -950,7 +983,7 @@ async function renderSettings() {
   const s = st.settings;
   $('#view-settings').innerHTML = `
     <h1>Settings</h1>
-    <div class="sub">API keys are stored locally in the SQLite database on this machine only.</div>
+    <div class="sub">API keys are stored in this CRM's own database — locally by default, or in your configured Postgres/Supabase instance if you've set DATABASE_URL.</div>
     <div class="panel">
       <div class="panel-title"><h2>Instantly</h2></div>
       <div class="form-grid">
@@ -966,6 +999,11 @@ async function renderSettings() {
         <div class="field">
           <label>Sync interval (minutes)</label>
           <input id="sInterval" value="${esc(s.sync_interval_min)}" type="number" min="1">
+        </div>
+        <div class="field full">
+          <label>Only sync this campaign</label>
+          <select id="sSyncScope"><option value="">Loading campaigns…</option></select>
+          <div class="hint">Restricts sync, dashboard, leads, and analytics to one campaign. Other campaigns stay untouched in Instantly — they're just not pulled into this CRM. Leave as "All campaigns &amp; lists" to sync everything.</div>
         </div>
       </div>
     </div>
@@ -989,6 +1027,15 @@ async function renderSettings() {
           <input id="sSenderName" value="${esc(s.sender_first_name)}" placeholder="Detected from your sending accounts — leave empty to auto-detect">
           <span class="hint">${s.sender_first_name ? `Currently: ${esc(s.sender_first_name)}` : 'Auto-detected from your sending email accounts (e.g. jaysenxo@… → Jaysen). Type a name to override.'}</span>
         </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><h2>Notifications</h2></div>
+      <div class="hint" style="margin-bottom:10px">Get a push notification on this device when a lead replies. On iPhone: open this site from Safari, tap Share → Add to Home Screen, then open it from the Home Screen icon before enabling — iOS only allows push from installed sites.</div>
+      <div class="row" style="gap:8px">
+        <button class="btn btn-primary" id="enablePush">🔔 Enable notifications on this device</button>
+        <button class="btn" id="testPush">Send test notification</button>
+        <span class="hint" id="pushResult" style="color:var(--muted);font-size:12px"></span>
       </div>
     </div>
     <div class="row" style="gap:8px;display:flex;align-items:center;margin-top:14px">
@@ -1035,10 +1082,63 @@ async function renderSettings() {
     body.openai_model = $('#sModel').value;
     body.sender_first_name = $('#sSenderName').value;
     body.sync_interval_min = $('#sInterval').value;
+    body.sync_scope_campaign_id = $('#sSyncScope').value;
     await api('/api/settings', { method: 'POST', body });
     toast('Settings saved');
     renderSettings();
   });
+  (async () => {
+    const sel = $('#sSyncScope');
+    try {
+      const campaigns = await api('/api/instantly-campaigns');
+      sel.innerHTML = `<option value="">All campaigns &amp; lists</option>` + campaigns.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+      sel.value = s.sync_scope_campaign_id || '';
+    } catch (err) {
+      sel.innerHTML = `<option value="">All campaigns &amp; lists</option>`;
+      if (s.sync_scope_campaign_id) sel.innerHTML += `<option value="${esc(s.sync_scope_campaign_id)}" selected>${esc(s.sync_scope_campaign_id)} (couldn't load name)</option>`;
+    }
+  })();
+  $('#enablePush').addEventListener('click', enablePushNotifications);
+  $('#testPush').addEventListener('click', async () => {
+    try {
+      const r = await api('/api/push/test', { method: 'POST' });
+      $('#pushResult').textContent = `Sent to ${r.sent}/${r.total} device(s).`;
+    } catch (err) {
+      $('#pushResult').textContent = '';
+      toast(err.message, true);
+    }
+  });
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+async function enablePushNotifications() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    toast("This browser doesn't support push notifications.", true);
+    return;
+  }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('Notification permission was not granted.', true); return; }
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    const { publicKey } = await api('/api/push/vapid-public-key');
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+    }
+    await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+    toast('Notifications enabled on this device.');
+  } catch (err) {
+    toast('Could not enable notifications: ' + err.message, true);
+  }
 }
 
 // ---------- Analytics ----------
@@ -1047,7 +1147,7 @@ async function renderAnalytics() {
   const campaignOpts = `<option value="">All campaigns</option>` + state.campaigns.filter(c => c.kind === 'campaign').map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   $('#view-analytics').innerHTML = `
     <h1>Analytics</h1>
-    <div class="sub">Reply, open, and engagement rates for your outreach.</div>
+    <div class="sub">Reply rate, meetings, closed deals, and revenue for your outreach.</div>
     <div class="filters"><select id="aCampaign">${campaignOpts}</select></div>
     <div id="analyticsPanel"></div>`;
   $('#aCampaign').addEventListener('change', renderAnalyticsData);
@@ -1059,13 +1159,16 @@ async function renderAnalyticsData() {
   const j = await api('/api/analytics' + (cid ? '?campaign=' + cid : ''));
   const card = (lbl, num, sub, color) => `<div class="card"><div class="num" style="color:${color}">${num}</div><div class="lbl">${lbl}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${sub}</div></div>`;
   const statusRows = j.byStatus.map((s) => `<li><b>${esc(s.my_status || 'untracked').replace(/_/g, ' ')}</b><span>${s.n} leads</span></li>`).join('') || '<li>No status data</li>';
+  const money = (n) => '$' + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
   $('#analyticsPanel').innerHTML = `
     <div class="analytics-grid">
       ${card('Total leads', j.leads, j.campaignName, 'var(--accent)')}
-      ${card('Replied', j.replied, j.sentEmails + ' sent emails', 'var(--green)')}
+      ${card('Replied', j.replied, 'of all leads', 'var(--green)')}
       ${card('Reply rate', j.replyRate + '%', 'of all leads replied', 'var(--purple)')}
-      ${card('Open rate', j.openRate + '%', j.openedCount + ' opens', 'var(--amber)')}
-      ${card('Click rate', j.clickRate + '%', j.clicked + ' clicks', 'var(--red)')}
+      ${card('Meeting booked', j.meetingBooked, 'booked or completed', 'var(--amber)')}
+      ${card('Show up', j.showUp, 'meeting completed', 'var(--accent-dark)')}
+      ${card('Closed won', j.closedWon, 'marked Won', 'var(--green)')}
+      ${card('Revenue', money(j.revenue), 'sum of deal value on leads', 'var(--green)')}
     </div>
     <div class="panel"><div class="panel-title"><h2>Leads by status</h2></div><ul class="activity">${statusRows}</ul></div>`;
 }

@@ -4,3 +4,7 @@ backups/
 .env
 *.log
 .DS_Store
+
+# Database credentials — never commit these
+dbpass.txt
+dbpass.txt.save

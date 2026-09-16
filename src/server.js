@@ -1,8 +1,30 @@
 const path = require('node:path');
+
+// Load .env if present, without overriding real env vars (e.g. from a host platform)
+// and without adding a dotenv dependency. Must run before anything below reads process.env.
+(function loadDotEnv() {
+  const fs = require('node:fs');
+  const envPath = path.join(__dirname, '..', '.env');
+  if (!fs.existsSync(envPath)) return;
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = value;
+  }
+})();
+
 const express = require('express');
-const { query, getSetting, setSetting, logActivity, initSchema, markStaleDrafts } = require('./db');
-const { api, runSync, INTEREST_LABELS, DEFAULT_BASE } = require('./instantly');
-const { generateReply, deriveSenderName, ensureSignature } = require('./ai');
+const { query, getSetting, setSetting, logActivity, initSchema, markStaleDrafts, ensureDb, shutdownDb } = require('./db');
+const { api, runSync, backfillHtmlBodies, INTEREST_LABELS, DEFAULT_BASE } = require('./instantly');
+const { generateReply, deriveSenderName, ensureSignature, DEFAULT_OPENAI_BASE_URL, DEFAULT_OPENAI_MODEL } = require('./ai');
+const { ensureVapidKeys, saveSubscription, removeSubscription, sendToAll } = require('./push');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -20,22 +42,25 @@ const COOKIE = 'crm_auth';
 function authOk(req) {
   if (!AUTH_PASS) return true; // auth disabled
   const cookie = (req.headers.cookie || '').split(';').map((c) => c.trim()).find((c) => c.startsWith(COOKIE + '='));
-  return cookie !== undefined && cookie.split('=')[1] === AUTH_PASS;
+  if (!cookie) return false;
+  try {
+    return decodeURIComponent(cookie.slice(COOKIE.length + 1)) === AUTH_PASS;
+  } catch {
+    return false; // malformed cookie value
+  }
 }
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   if (!AUTH_PASS) return res.json({ ok: true });
   if (username === AUTH_USER && password === AUTH_PASS) {
-    res.setHeader('Set-Cookie', `${COOKIE}=${AUTH_PASS}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`);
+    res.setHeader('Set-Cookie', `${COOKIE}=${encodeURIComponent(AUTH_PASS)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`);
     return res.json({ ok: true });
   }
   return res.status(401).json({ error: 'Invalid credentials' });
 });
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 app.use('/api', (req, res, next) => {
-  if (!AUTH_PASS) return next();
-  const cookie = (req.headers.cookie || '').split(';').map((c) => c.trim()).find((c) => c.startsWith(COOKIE + '='));
-  if (cookie && decodeURIComponent(cookie.split('=')[1]) === AUTH_PASS) return next();
+  if (authOk(req)) return next();
   res.status(401).json({ error: 'Unauthorized' });
 });
 
@@ -55,6 +80,7 @@ app.get('/api/state', async (req, res) => {
         openai_model: await getSetting('openai_model', 'gpt-4o-mini'),
         sender_first_name: await getSetting('sender_first_name', ''),
         sync_interval_min: await getSetting('sync_interval_min', '5'),
+        sync_scope_campaign_id: await getSetting('sync_scope_campaign_id', ''),
       },
       sync: {
         state: await getSetting('sync_state', 'idle'),
@@ -68,7 +94,7 @@ app.get('/api/state', async (req, res) => {
 });
 
 app.post('/api/settings', async (req, res) => {
-  const { instantly_api_key, instantly_base_url, openai_api_key, openai_base_url, openai_model, sender_first_name, sync_interval_min } = req.body || {};
+  const { instantly_api_key, instantly_base_url, openai_api_key, openai_base_url, openai_model, sender_first_name, sync_interval_min, sync_scope_campaign_id } = req.body || {};
   try {
     if (instantly_api_key) await setSetting('instantly_api_key', instantly_api_key.trim());
     if (instantly_base_url) await setSetting('instantly_base_url', instantly_base_url.trim());
@@ -76,12 +102,28 @@ app.post('/api/settings', async (req, res) => {
     if (openai_base_url) await setSetting('openai_base_url', openai_base_url.trim());
     if (openai_model) await setSetting('openai_model', openai_model.trim());
     if (sender_first_name !== undefined) await setSetting('sender_first_name', String(sender_first_name).trim());
+    if (sync_scope_campaign_id !== undefined) await setSetting('sync_scope_campaign_id', String(sync_scope_campaign_id).trim());
     if (sync_interval_min) {
       await setSetting('sync_interval_min', String(Math.max(1, parseInt(sync_interval_min, 10) || 5)));
       scheduleSync();
     }
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/instantly-campaigns', async (req, res) => {
+  try {
+    const client = await api(await getSetting('instantly_base_url', DEFAULT_BASE));
+    const all = [];
+    let cursor;
+    for (let i = 0; i < 20; i++) {
+      const page = await client.campaigns(100, cursor);
+      all.push(...page.items.map((c) => ({ id: c.id, name: c.name || c.campaign_name || 'Unnamed' })));
+      if (!page.next_starting_after) break;
+      cursor = page.next_starting_after;
+    }
+    res.json(all);
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.post('/api/sync', async (req, res) => {
@@ -103,12 +145,12 @@ app.post('/api/test-connections', async (req, res) => {
     const OpenAI = require('openai');
     const key = await getSetting('openai_api_key', '');
     if (!key) throw new Error('AI API key is not set. Add it in Settings.');
-    const aiClient = new OpenAI({ apiKey: key, baseURL: await getSetting('openai_base_url', 'https://opencode.ai/zen/v1'), timeout: 45000 });
-    const model = await getSetting('openai_model', 'hy3-free');
+    const aiClient = new OpenAI({ apiKey: key, baseURL: await getSetting('openai_base_url', DEFAULT_OPENAI_BASE_URL), timeout: 45000 });
+    const model = await getSetting('openai_model', DEFAULT_OPENAI_MODEL);
     const res2 = await aiClient.chat.completions.create({
       model,
       temperature: 0,
-      max_tokens: 10,
+      max_tokens: 60, // reasoning models spend tokens "thinking" before the answer
       messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
     }, { timeout: 20000 });
     const text = (res2.choices && res2.choices[0].message.content || '').trim();
@@ -134,7 +176,7 @@ app.get('/api/dashboard', async (req, res) => {
     const attention = (await query(`
       SELECT id, email, first_name, last_name, company_name, campaign_id, my_status, priority, reply_count, last_reply_at, last_touch_at, next_touch_at
       FROM leads WHERE reply_count > 0 AND (my_status = ANY($1::text[]) OR my_status IS NULL)
-      ORDER BY CASE my_status WHEN 'needs_reply' THEN 0 ELSE 1 END, COALESCE(last_reply_at, last_touch_at) DESC NULLS LAST LIMIT 50
+      ORDER BY CASE my_status WHEN 'needs_reply' THEN 0 ELSE 1 END, COALESCE(last_reply_at, last_touch_at) ASC NULLS LAST LIMIT 50
     `, [['needs_reply', 'follow_up']])).rows;
 
     const nowIso = new Date().toISOString();
@@ -284,8 +326,20 @@ app.post('/api/leads/:id/priority', async (req, res) => {
   try {
     const lead = (await query('SELECT * FROM leads WHERE id = $1', [req.params.id])).rows[0];
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
-    await query('UPDATE leads SET priority = $1 WHERE id = $2', [priority, lead.id]);
+    await query('UPDATE leads SET priority = $1, priority_manual = 1 WHERE id = $2', [priority, lead.id]);
     await logActivity({ leadId: lead.id, campaignId: lead.campaign_id, type: 'priority_change', detail: `Priority set to ${priority}` });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/leads/:id/deal-value', async (req, res) => {
+  const num = parseFloat(req.body && req.body.value);
+  if (Number.isNaN(num) || num < 0) return res.status(400).json({ error: 'Provide a non-negative number' });
+  try {
+    const lead = (await query('SELECT * FROM leads WHERE id = $1', [req.params.id])).rows[0];
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    await query('UPDATE leads SET deal_value = $1 WHERE id = $2', [num, lead.id]);
+    await logActivity({ leadId: lead.id, campaignId: lead.campaign_id, type: 'deal_value_change', detail: `Deal value set to $${num.toFixed(2)}` });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -327,7 +381,7 @@ app.post('/api/leads/bulk', async (req, res) => {
       changes = r.rowCount; detail = `Bulk set status to ${value} on ${changes} leads`;
     } else if (action === 'priority') {
       if (!PRIORITIES.includes(value)) return res.status(400).json({ error: 'Invalid priority' });
-      const r = await query(`UPDATE leads SET priority = $${ids.length + 1} WHERE id IN (${placeholders})`, [...ids, value]);
+      const r = await query(`UPDATE leads SET priority = $${ids.length + 1}, priority_manual = 1 WHERE id IN (${placeholders})`, [...ids, value]);
       changes = r.rowCount; detail = `Bulk set priority to ${value} on ${changes} leads`;
     } else if (action === 'follow_up') {
       const nextTouch = new Date(Date.now() + (parseInt(value, 10) || 3) * 24 * 60 * 60 * 1000).toISOString();
@@ -355,9 +409,9 @@ app.get('/api/export', async (req, res) => {
   const bind = (v) => { arg++; params.push(v); return '$' + arg; };
   if (req.query.priority && PRIORITIES.includes(req.query.priority)) where.push('priority = ' + bind(req.query.priority));
   if (req.query.replied === '1') where.push('reply_count > 0');
-  const rows = (await query(`SELECT id, email, first_name, last_name, company_name, job_title, my_status, priority, reply_count, opened_count, clicked_count, last_reply_at, last_touch_at, next_touch_at FROM leads WHERE ${where.join(' AND ')} ORDER BY COALESCE(last_reply_at, last_touch_at, updated_at) DESC NULLS LAST`, params)).rows;
+  const rows = (await query(`SELECT id, email, first_name, last_name, company_name, job_title, my_status, priority, reply_count, opened_count, clicked_count, deal_value, last_reply_at, last_touch_at, next_touch_at FROM leads WHERE ${where.join(' AND ')} ORDER BY COALESCE(last_reply_at, last_touch_at, updated_at) DESC NULLS LAST`, params)).rows;
   const esc = (v) => { const s = String(v == null ? '' : v); if (/^[=+\-@]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'; return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-  const header = ['id', 'email', 'first_name', 'last_name', 'company_name', 'job_title', 'my_status', 'priority', 'reply_count', 'opened_count', 'clicked_count', 'last_reply_at', 'last_touch_at', 'next_touch_at'];
+  const header = ['id', 'email', 'first_name', 'last_name', 'company_name', 'job_title', 'my_status', 'priority', 'reply_count', 'opened_count', 'clicked_count', 'deal_value', 'last_reply_at', 'last_touch_at', 'next_touch_at'];
   const lines = [header.join(',')].concat(rows.map((r) => header.map((k) => esc(r[k])).join(',')));
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="leads-${req.query.status || 'all'}.csv"`);
@@ -368,14 +422,14 @@ app.get('/api/analytics', async (req, res) => {
   const campaignId = req.query.campaign || null;
   const whereCamp = campaignId ? 'WHERE campaign_id = $1' : '';
   const params = campaignId ? [campaignId] : [];
-  const whereEmail = campaignId ? 'WHERE campaign_id = $1' : '';
+  const andCamp = whereCamp ? whereCamp + ' AND ' : 'WHERE ';
   try {
     const totalLeads = (await query(`SELECT COUNT(*)::int AS n FROM leads ${whereCamp}`, params)).rows[0].n || 0;
-    const sent = (await query(`SELECT COUNT(*)::int AS n FROM emails ${whereEmail ? whereEmail + ' AND direction = $2' : 'WHERE direction = $1'}`, campaignId ? [campaignId, 'sent'] : ['sent'])).rows[0].n || 0;
-    const received = (await query(`SELECT COUNT(*)::int AS n FROM emails ${whereEmail ? whereEmail + ' AND direction = $2' : 'WHERE direction = $1'}`, campaignId ? [campaignId, 'received'] : ['received'])).rows[0].n || 0;
-    const replied = (await query(`SELECT COUNT(*)::int AS n FROM leads ${whereCamp ? whereCamp + ' AND reply_count > 0' : 'WHERE reply_count > 0'}`, params)).rows[0].n || 0;
-    const openedCount = (await query(`SELECT COALESCE(SUM(opened_count), 0)::int AS n FROM leads ${whereCamp}`, params)).rows[0].n || 0;
-    const clicked = (await query(`SELECT COALESCE(SUM(clicked_count), 0)::int AS n FROM leads ${whereCamp}`, params)).rows[0].n || 0;
+    const replied = (await query(`SELECT COUNT(*)::int AS n FROM leads ${andCamp}reply_count > 0`, params)).rows[0].n || 0;
+    const meetingBooked = (await query(`SELECT COUNT(*)::int AS n FROM leads ${andCamp}interest_status IN (2, 3)`, params)).rows[0].n || 0;
+    const showUp = (await query(`SELECT COUNT(*)::int AS n FROM leads ${andCamp}interest_status = 3`, params)).rows[0].n || 0;
+    const closedWon = (await query(`SELECT COUNT(*)::int AS n FROM leads ${andCamp}interest_status = 4`, params)).rows[0].n || 0;
+    const revenue = (await query(`SELECT COALESCE(SUM(deal_value), 0)::float AS n FROM leads ${whereCamp}`, params)).rows[0].n || 0;
     const byStatus = (await query(`SELECT my_status, COUNT(*)::int AS n FROM leads ${whereCamp} GROUP BY my_status`, params)).rows;
     let campaignName = 'All campaigns';
     if (campaignId) {
@@ -384,11 +438,9 @@ app.get('/api/analytics', async (req, res) => {
     }
     res.json({
       campaign: campaignId, campaignName,
-      leads: totalLeads, sentEmails: sent, receivedEmails: received,
-      replied: replied, replyRate: totalLeads ? +(replied / totalLeads * 100).toFixed(1) : 0,
-      openRate: totalLeads ? +(openedCount / totalLeads * 100).toFixed(1) : 0,
-      clickRate: totalLeads ? +(clicked / totalLeads * 100).toFixed(1) : 0,
-      openedCount, clicked,
+      leads: totalLeads, replied,
+      replyRate: totalLeads ? +(replied / totalLeads * 100).toFixed(1) : 0,
+      meetingBooked, showUp, closedWon, revenue,
       byStatus,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -531,6 +583,35 @@ app.delete('/api/drafts/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/push/vapid-public-key', async (req, res) => {
+  try {
+    const { publicKey } = await ensureVapidKeys();
+    res.json({ publicKey });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/push/subscribe', async (req, res) => {
+  try {
+    await saveSubscription(req.body);
+    res.json({ ok: true });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/push/unsubscribe', async (req, res) => {
+  try {
+    await removeSubscription(req.body && req.body.endpoint);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/push/test', async (req, res) => {
+  try {
+    const r = await sendToAll('Test notification', 'If you can see this, notifications are working.', '/');
+    if (r.total === 0) return res.status(400).json({ error: 'No devices are subscribed yet. Enable notifications first.' });
+    res.json({ ok: true, ...r });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 function stripRaw(obj) {
   if (!obj) return obj;
   const { raw, ...rest } = obj;
@@ -563,9 +644,12 @@ async function scheduleSync() {
 }
 (async () => {
   try {
+    await ensureDb();
     await initSchema();
     await markStaleDrafts();
+    await backfillHtmlBodies();
     await seedSettingsFromEnv();
+    await ensureVapidKeys();
     console.log('[db] schema ready');
   } catch (e) {
     console.error('[db] init failed:', e.message);
@@ -586,4 +670,13 @@ async function scheduleSync() {
     }
     process.exit(1);
   });
+  const shutdown = async (signal) => {
+    console.log(`\n[${signal}] shutting down…`);
+    server.close();
+    if (syncTimer) clearInterval(syncTimer);
+    await shutdownDb();
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 })();

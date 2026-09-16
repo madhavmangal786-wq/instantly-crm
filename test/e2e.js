@@ -1,9 +1,13 @@
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const os = require('node:os');
+const { Client } = require('pg');
 
 const MOCK_PORT = 3199;
 const CRM_PORT = 3100;
+// A dedicated port + data dir so this never touches your real local database.
+const TEST_PGPORT = parseInt(process.env.TEST_PGPORT || '5544', 10);
 const CRM = `http://localhost:${CRM_PORT}`;
 
 const LEADS = [
@@ -135,23 +139,45 @@ async function waitSyncIdle() {
 }
 
 async function main() {
-  const dbFile = path.join(__dirname, '..', 'data', 'crm.db');
-  const tmpData = path.join('/var/folders/46/65str5jx7b1_zs2d3fwvws4m0000gn/T/opencode', 'crm-test-data');
+  const tmpData = path.join(os.tmpdir(), 'instantly-crm-e2e-' + Date.now());
   require('node:fs').rmSync(tmpData, { recursive: true, force: true });
 
   await new Promise((r) => mock.listen(MOCK_PORT, r));
   console.log('mock instantly on', MOCK_PORT);
 
   const crm = spawn('node', ['--disable-warning=ExperimentalWarning', 'src/server.js'], {
-    env: { ...process.env, PORT: String(CRM_PORT), CRM_DATA_DIR: tmpData },
+    // Force the embedded-Postgres path (never the dev DB) at an isolated port + data dir.
+    env: {
+      ...process.env, PORT: String(CRM_PORT), CRM_DATA_DIR: tmpData, PGPORT: String(TEST_PGPORT),
+      DATABASE_URL: '', POSTGRES_URL: '', SUPABASE_URL: '', PGHOST: '',
+      // Explicitly override (not just omit) so the app's .env loader — which fills in
+      // only unset keys — can't pull in the real project .env's login credentials here.
+      APP_USERNAME: '', APP_PASSWORD: '',
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   crm.stdout.on('data', (d) => process.stdout.write('[crm] ' + d));
   crm.stderr.on('data', (d) => process.stderr.write('[crm!] ' + d));
 
-  await sleep(800);
-  for (let i = 0; i < 20; i++) {
-    try { await api('/api/state'); break; } catch { await sleep(500); }
+  // Embedded Postgres has to run initdb + start a fresh cluster on first boot, which is
+  // much slower than the old in-process sqlite — give it real time before giving up.
+  await sleep(1500);
+  let ready = false;
+  for (let i = 0; i < 40; i++) {
+    try { await api('/api/state'); ready = true; break; } catch { await sleep(750); }
+  }
+  if (!ready) throw new Error('CRM did not become ready in time (embedded Postgres startup too slow or failed)');
+
+  let pgClient = null;
+  try {
+  pgClient = new Client({ host: 'localhost', port: TEST_PGPORT, database: 'instantly_crm', user: 'postgres', password: 'postgres' });
+  await pgClient.connect();
+  async function insertDraft(leadId, subject, body, createdAt) {
+    const r = await pgClient.query(
+      "INSERT INTO drafts (lead_id, subject, body, status, created_at) VALUES ($1, $2, $3, 'draft', $4) RETURNING id",
+      [leadId, subject, body, createdAt]
+    );
+    return r.rows[0].id;
   }
 
   console.log('\n1) settings + sync');
@@ -172,7 +198,7 @@ async function main() {
   check('appointment=1 (Sam meeting booked)', d.counts.appointment === 1, `got ${d.counts.appointment}`);
   check('done=1 (Mike not interested)', d.counts.done === 1, `got ${d.counts.done}`);
   check('follow_up=1 (Jane contacted, waiting)', d.counts.follow_up === 1, `got ${d.counts.follow_up}`);
-  check('attention lists newest reply first', d.attention[0] && d.attention[0].email === 'link@test.com');
+  check('attention lists oldest unanswered reply first (most overdue surfaces, not buried)', d.attention[0] && d.attention[0].email === 'old@leads.io', JSON.stringify(d.attention.map((a) => a.email)));
   check('no reply spam during backfill (first sync logs no historical replies)', !d.recentActivity.some((a) => a.type === 'reply_received'));
 
   console.log('\n2b) new reply after backfill → logged once');
@@ -227,10 +253,7 @@ async function main() {
   await api('/api/settings', { method: 'POST', body: { openai_api_key: 'sk-fake', openai_model: 'gpt-test' } });
   const draftRes = await api('/api/leads/lead-001/draft', { method: 'POST' });
   check('draft without valid OpenAI key errors cleanly', draftRes.status === 400 && /401|key/i.test(draftRes.json?.error || ''));
-  const { DatabaseSync } = require('node:sqlite');
-  const db = new DatabaseSync(path.join(tmpData, 'crm.db'));
-  const ins = db.prepare("INSERT INTO drafts (lead_id, subject, body, status, created_at) VALUES (?, ?, ?, 'draft', ?)");
-  const draftId = ins.run('lead-001', 'Re: Quick question about your call volume', 'Hi Alex — happy to share how we handle overflow. Got 15 min Thursday?', new Date().toISOString()).lastInsertRowid;
+  const draftId = await insertDraft('lead-001', 'Re: Quick question about your call volume', 'Hi Alex — happy to share how we handle overflow. Got 15 min Thursday?', new Date().toISOString());
   r = await api(`/api/drafts/${draftId}/send`, { method: 'POST' });
   check('send succeeds', r.status === 200, JSON.stringify(r.json));
   check('mock received reply with body', repliesSent.length === 1 && /[a-zA-Z]/.test(repliesSent[0].body.text));
@@ -242,12 +265,12 @@ async function main() {
   check('reply_sent logged', act.some((a) => a.type === 'reply_sent'));
 
   console.log('\n6b) send uses your edited text, not the stale draft');
-  const draftId2 = ins.run('lead-001', 'Old subject', 'Old body', new Date().toISOString()).lastInsertRowid;
+  const draftId2 = await insertDraft('lead-001', 'Old subject', 'Old body', new Date().toISOString());
   r = await api(`/api/drafts/${draftId2}/send`, { method: 'POST', body: { subject: 'Edited subject', body: 'Edited body with my changes' } });
   check('edited send succeeds', r.status === 200);
   check('mock received the EDITED subject', repliesSent[1].subject === 'Edited subject', JSON.stringify(repliesSent[1].subject));
   check('mock received the EDITED body', repliesSent[1].body.text === 'Edited body with my changes', JSON.stringify(repliesSent[1].body));
-  const persisted = db.prepare('SELECT subject, body FROM drafts WHERE id = ?').get(draftId2);
+  const persisted = (await pgClient.query('SELECT subject, body FROM drafts WHERE id = $1', [draftId2])).rows[0];
   check('edited text persisted to the draft', persisted.subject === 'Edited subject' && persisted.body === 'Edited body with my changes', JSON.stringify(persisted));
 
   console.log('\n6c) sender name detection + signature');
@@ -263,7 +286,9 @@ async function main() {
   r = await api('/api/leads/lead-003/priority', { method: 'POST', body: { priority: 'high' } });
   check('manual priority set', (await api('/api/leads/lead-003')).json.lead.priority === 'high');
   r = await api('/api/campaigns/camp-1/leads?priority=high');
-  check('priority filter works', r.json.leads.length === 1);
+  // Not "exactly 1": Alex and Sam are also active (non-done) leads, which the app
+  // auto-elevates to high priority — that's intentional and unrelated to this check.
+  check('priority filter works', r.json.leads.some((l) => l.id === 'lead-003'), JSON.stringify(r.json.leads.map((l) => l.id)));
 
   r = await api('/api/sync', { method: 'POST' });
   await waitSyncIdle();
@@ -297,17 +322,25 @@ async function main() {
   check('date_to covers the whole end day', r.json.total === dayCount, `got ${r.json.total} vs ${dayCount}`);
 
   console.log('\n7f) send idempotency (no double-send)');
-  const draftId3 = ins.run('lead-001', 'Re: Quick question about your call volume', 'Second try body', new Date().toISOString()).lastInsertRowid;
+  const draftId3 = await insertDraft('lead-001', 'Re: Quick question about your call volume', 'Second try body', new Date().toISOString());
   await api(`/api/drafts/${draftId3}/send`, { method: 'POST', body: { subject: 'S1', body: 'B1' } });
   r = await api(`/api/drafts/${draftId3}/send`, { method: 'POST', body: { subject: 'S1', body: 'B1' } });
   check('re-send of a sent draft rejected (409)', r.status === 409, `${r.status}: ${r.json.error}`);
   check('no duplicate reply reached the mock', repliesSent.filter((x) => x.body.text === 'B1').length === 1);
 
   console.log('\n7c) draft lifecycle (supersede + latest wins)');
-  ins.run('lead-004', 'Draft A', 'Body A', '2026-08-15T10:00:00.000Z');
-  ins.run('lead-004', 'Draft B', 'Body B', '2026-08-16T10:00:00.000Z');
+  await insertDraft('lead-004', 'Draft A', 'Body A', '2026-08-15T10:00:00.000Z');
+  await insertDraft('lead-004', 'Draft B', 'Body B', '2026-08-16T10:00:00.000Z');
   r = await api('/api/leads/lead-004');
   check('detail returns only the latest active draft', r.json.draft && r.json.draft.subject === 'Draft B', JSON.stringify(r.json.draft));
+
+  console.log('\n7g) priority set alone (no status override) still survives sync — regression for the priority-reset bug');
+  r = await api('/api/leads/lead-006/priority', { method: 'POST', body: { priority: 'low' } });
+  check('priority set to low', r.status === 200 && r.json.ok);
+  r = await api('/api/sync', { method: 'POST' });
+  await waitSyncIdle();
+  const l6 = (await api('/api/leads/lead-006')).json.lead;
+  check('manually-set priority is not clobbered back to high by the next sync', l6.priority === 'low', `got ${l6.priority}`);
 
   console.log('\n8) campaign context save + refresh');
   r = await api('/api/campaigns/camp-1/context', { method: 'PUT', body: { offer: 'AI phone agents for SMBs', icp: '10-50 employees', tone: 'casual', faqs: 'Q: cost?', notes: 'demo > call' } });
@@ -319,9 +352,12 @@ async function main() {
   r = await api('/api/drafts/99999/refine', { method: 'POST', body: { instruction: 'shorter' } });
   check('refine missing draft errors cleanly', r.status === 404);
 
-  crm.kill();
-  mock.close();
   console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILURES`);
+  } finally {
+    if (pgClient) await pgClient.end().catch(() => {});
+    crm.kill();
+    mock.close();
+  }
   process.exit(failures === 0 ? 0 : 1);
 }
 

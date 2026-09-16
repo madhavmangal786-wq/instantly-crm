@@ -23,6 +23,10 @@ function sqliteType(v) {
   if (v === null || v === undefined) return 'NULL';
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(20);
   const s = String(v);
+  if (s.includes('\n') || s.includes('\r') || s.includes('\\')) {
+    const esc = s.replace(/'/g, "''").replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\\n');
+    return "E'" + esc + "'";
+  }
   return "'" + s.replace(/'/g, "''") + "'";
 }
 

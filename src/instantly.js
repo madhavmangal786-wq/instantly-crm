@@ -179,13 +179,13 @@ async function updateLeadStatuses() {
 
     const engaged = (lead.reply_count > 0) || (lead.opened_count > 0) || (lead.clicked_count > 0);
     if (computed && computed !== 'done') {
-      await query("UPDATE leads SET priority = 'high' WHERE id = $1", [lead.id]);
+      await query("UPDATE leads SET priority = 'high' WHERE id = $1 AND priority_manual = 0", [lead.id]);
       continue;
     }
     if (engaged) continue;
     const touch = lead.last_touch_at ? new Date(lead.last_touch_at).getTime() : now;
     const stale = now - touch > 3 * 24 * 60 * 60 * 1000;
-    if (stale) await query("UPDATE leads SET priority = 'low' WHERE id = $1 AND priority = 'normal'", [lead.id]);
+    if (stale) await query("UPDATE leads SET priority = 'low' WHERE id = $1 AND priority = 'normal' AND priority_manual = 0", [lead.id]);
   }
 }
 
@@ -194,8 +194,26 @@ const AUTO_SENDER_RE = /^(no-?reply|donotreply|mailer[- ]?daemon)@/i;
 
 function isAutoReply(e) {
   const subj = e.subject || '';
-  const body = (e.body && e.body.text) || e.content_preview || '';
+  const body = extractBodyText(e);
   return AUTO_REPLY_RE.test(subj + ' ' + body) || AUTO_SENDER_RE.test(e.from_address_email || '');
+}
+
+// Instantly returns some emails (notably outbound "sent" ones) as HTML-only, with
+// no body.text at all — without this, those messages store as an empty string and
+// show up blank in the thread (and vanish from the AI's context of what was said).
+function htmlToText(html) {
+  if (!html) return '';
+  let t = String(html);
+  t = t.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(div|p|li|tr)>/gi, '\n');
+  t = t.replace(/<[^>]+>/g, '');
+  t = t.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&#39;/g, "'").replace(/&quot;/gi, '"');
+  t = t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+  return t.trim();
+}
+
+function extractBodyText(e) {
+  const b = e.body || {};
+  return b.text || (b.html ? htmlToText(b.html) : '') || e.content_preview || '';
 }
 
 async function upsertEmails(items) {
@@ -220,7 +238,7 @@ async function upsertEmails(items) {
       ON CONFLICT (id) DO NOTHING
     `, [
       e.id, e.thread_id ?? null, leadId, e.campaign_id ?? null, e.subject ?? '',
-      (e.body && e.body.text) || e.content_preview || '', direction, e.ue_type ?? null,
+      extractBodyText(e), direction, e.ue_type ?? null,
       e.from_address_email ?? null, e.to_address_email_list ?? null, e.is_unread ?? 0,
       isAutoReply(e) ? 1 : 0, ts ?? null, JSON.stringify(e)
     ]);
@@ -241,7 +259,7 @@ async function upsertEmails(items) {
         at: ts || new Date().toISOString(),
       });
     }
-    await query("UPDATE leads SET priority = 'high' WHERE id = $1", [leadId]);
+    await query("UPDATE leads SET priority = 'high' WHERE id = $1 AND priority_manual = 0", [leadId]);
   }
   return { newReplies, inserted };
 }
@@ -257,6 +275,7 @@ async function syncRepliedLeadEmails(client, progress) {
   `, [cap])).rows;
   let fetched = 0;
   let added = 0;
+  const newReplies = [];
   const now = new Date().toISOString();
   let idx = 0;
   for (const lead of replied) {
@@ -266,6 +285,7 @@ async function syncRepliedLeadEmails(client, progress) {
       const r = await upsertEmails(items);
       fetched += items.length;
       added += r.inserted;
+      newReplies.push(...r.newReplies);
       progress({ email: lead.email, emails: items.length, remaining: replied.length - idx });
     } catch (err) {
       console.error(`[sync] thread fetch failed for ${lead.email}: ${err.message}`);
@@ -273,10 +293,10 @@ async function syncRepliedLeadEmails(client, progress) {
     await query('UPDATE leads SET last_email_fetch_at = $1 WHERE id = $2', [now, lead.id]);
     await sleep(EMAIL_RATE_LIMIT_MS);
   }
-  return { fetched, added };
+  return { fetched, added, newReplies };
 }
 
-async function syncAllLeads(client, progress) {
+async function syncAllLeads(client, progress, scopeCampaignId) {
   let cursor;
   let total = 0;
   const pages = Math.min(parseInt(await getSetting('sync_leads_pages', '30'), 10) || 30, 100);
@@ -288,7 +308,7 @@ async function syncAllLeads(client, progress) {
       console.warn(`[sync] Leads fetch exceeded ${Math.round(timeBudgetMs / 60000)}m budget at ${total} leads; stopping leads fetch.`);
       break;
     }
-    const { items, next_starting_after } = await client.leads(null, { startingAfter: cursor });
+    const { items, next_starting_after } = await client.leads(scopeCampaignId || null, { startingAfter: cursor });
     const newIds = [];
     for (const c of items) {
       const existing = (await query('SELECT * FROM leads WHERE id = $1', [c.id])).rows[0];
@@ -311,7 +331,7 @@ async function syncAllLeads(client, progress) {
 }
 
 async function syncEmailsForGroup(client, group, progress) {
-  if (group.kind === 'list') return { total: 0, added: 0 };
+  if (group.kind === 'list') return { total: 0, added: 0, newReplies: [] };
   const resumeKey = `email_resume_${group.id}`;
   let resume = null;
   try { resume = JSON.parse(await getSetting(resumeKey, '') || 'null'); } catch { resume = null; }
@@ -320,12 +340,14 @@ async function syncEmailsForGroup(client, group, progress) {
   let total = 0;
   let added = 0;
   let more = false;
+  const newReplies = [];
   const pages = Math.min(parseInt(await getSetting('sync_email_pages', '3'), 10) || 3, 10);
   for (let i = 0; i < pages; i++) {
     const { items, next_starting_after } = await client.emails({ campaignId: group.id, startingAfter: cursor, minTimestamp: since });
     const r = await upsertEmails(items);
     total += items.length;
     added += r.inserted;
+    newReplies.push(...r.newReplies);
     progress({ total, added });
     if (!next_starting_after || items.length === 0) { more = false; break; }
     cursor = next_starting_after;
@@ -334,7 +356,7 @@ async function syncEmailsForGroup(client, group, progress) {
   }
   if (more) await setSetting(resumeKey, JSON.stringify({ cursor, since }));
   else await setSetting(resumeKey, '');
-  return { total, added };
+  return { total, added, newReplies };
 }
 
 async function syncLockedStale() {
@@ -371,42 +393,49 @@ async function runSync() {
   try {
     const base = await getSetting('instantly_base_url', DEFAULT_BASE);
     const client = await api(base);
+    const scopeCampaignId = await getSetting('sync_scope_campaign_id', '');
+    const isFirstSync = !(await getSetting('last_sync_at', ''));
 
     await setSetting('sync_progress', 'Fetching campaigns…');
     const { items: campaignItems, next_starting_after } = await client.campaigns(100);
-    await upsertCampaigns(campaignItems);
+    await upsertCampaigns(scopeCampaignId ? campaignItems.filter((c) => c.id === scopeCampaignId) : campaignItems);
     let campaignCursor = next_starting_after;
     while (campaignCursor) {
       const page = await client.campaigns(100, campaignCursor);
-      await upsertCampaigns(page.items);
+      await upsertCampaigns(scopeCampaignId ? page.items.filter((c) => c.id === scopeCampaignId) : page.items);
       campaignCursor = page.next_starting_after;
       await sleep(120);
     }
 
-    await setSetting('sync_progress', 'Fetching lead lists…');
-    const { items: listItems, next_starting_after: listCursor } = await client.leadLists(100);
-    await upsertLeadLists(listItems);
-    let cursor = listCursor;
-    while (cursor) {
-      const page = await client.leadLists(100, cursor);
-      await upsertLeadLists(page.items);
-      cursor = page.next_starting_after;
-      await sleep(120);
+    if (!scopeCampaignId) {
+      await setSetting('sync_progress', 'Fetching lead lists…');
+      const { items: listItems, next_starting_after: listCursor } = await client.leadLists(100);
+      await upsertLeadLists(listItems);
+      let cursor = listCursor;
+      while (cursor) {
+        const page = await client.leadLists(100, cursor);
+        await upsertLeadLists(page.items);
+        cursor = page.next_starting_after;
+        await sleep(120);
+      }
     }
 
     const groups = (await query('SELECT * FROM campaigns ORDER BY name')).rows;
     const listCount = groups.filter((g) => g.kind === 'list').length;
+    const progressLabel = scopeCampaignId ? `Fetching leads (${groups[0]?.name || 'scoped campaign'})…` : 'Fetching leads (all campaigns + lists)…';
 
-    await setSetting('sync_progress', 'Fetching leads (all campaigns + lists)…');
+    await setSetting('sync_progress', progressLabel);
     const leadsTotal = await syncAllLeads(client, ({ added, total }) =>
-      setSetting('sync_progress', `Fetching leads (all campaigns + lists)… ${total} so far`)
+      setSetting('sync_progress', `${progressLabel} ${total} so far`), scopeCampaignId
     );
 
     let emailsTotal = 0;
     let emailsAdded = 0;
     let campIdx = 0;
+    const allNewReplies = [];
     for (const g of groups) {
       if (g.kind === 'list') continue;
+      if (scopeCampaignId && g.id !== scopeCampaignId) continue;
       campIdx++;
       const label = `Campaign ${campIdx}/${groups.length - listCount}: ${g.name}`;
       await setSetting('sync_progress', `${label} — emails…`);
@@ -415,6 +444,7 @@ async function runSync() {
       );
       emailsTotal += r.total;
       emailsAdded += r.added;
+      allNewReplies.push(...r.newReplies);
     }
 
     await setSetting('sync_progress', 'Fetching threads for leads who replied…');
@@ -423,6 +453,17 @@ async function runSync() {
     );
     emailsTotal += replied.fetched;
     emailsAdded += replied.added;
+    allNewReplies.push(...replied.newReplies);
+
+    // Never notify on the very first (backfill) sync — that would fire one push per
+    // historical reply ever received, not just genuinely new ones.
+    if (!isFirstSync && allNewReplies.length) {
+      const leadIds = [...new Set(allNewReplies.map((r) => r.leadId).filter(Boolean))];
+      if (leadIds.length) {
+        const leadRows = (await query('SELECT id, first_name, email, company_name FROM leads WHERE id = ANY($1::text[])', [leadIds])).rows;
+        require('./push').notifyNewReplies(leadRows).catch((err) => console.error('[push] notify failed:', err.message));
+      }
+    }
 
     await updateLeadStatuses();
     await query('DELETE FROM activity_log WHERE timestamp < $1', [new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()]);
@@ -442,4 +483,22 @@ async function runSync() {
   }
 }
 
-module.exports = { api, runSync, updateLeadStatuses, clearSyncLock, syncLockedStale, INTEREST_LABELS, DEFAULT_BASE };
+// One-time repair for emails stored before extractBodyText() handled HTML-only
+// bodies: re-derive body_text from the already-stored raw payload, no re-fetch needed.
+async function backfillHtmlBodies() {
+  const { rows } = await query("SELECT id, raw FROM emails WHERE body_text IS NULL OR body_text = ''");
+  let fixed = 0;
+  for (const row of rows) {
+    let raw;
+    try { raw = JSON.parse(row.raw); } catch { continue; }
+    const text = extractBodyText(raw);
+    if (text) {
+      await query('UPDATE emails SET body_text = $1 WHERE id = $2', [text, row.id]);
+      fixed++;
+    }
+  }
+  if (fixed) console.log(`[db] backfilled body text for ${fixed} email(s)`);
+  return fixed;
+}
+
+module.exports = { api, runSync, updateLeadStatuses, clearSyncLock, syncLockedStale, backfillHtmlBodies, INTEREST_LABELS, DEFAULT_BASE };
