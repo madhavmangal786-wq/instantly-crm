@@ -41,3 +41,23 @@ Runs the full flow (sync, filters, dashboard, send, status management) against a
 ```bash
 node test/e2e.js
 ```
+
+The suite runs against its own throwaway embedded Postgres (separate port and data
+directory), so it never touches your real database.
+
+## Deployment
+
+Runs on Render (web service) backed by Supabase Postgres.
+
+- Set `DATABASE_URL` to the Supabase connection string. This is required in any hosted
+  environment — Render's filesystem is ephemeral, so the embedded-Postgres fallback
+  would lose all data on every restart or redeploy.
+- `APP_USERNAME` / `APP_PASSWORD` gate the login. Set a real password: the service URL
+  is public, and the lead data behind it is personal information.
+- Instantly and AI credentials do **not** need to be set as environment variables if
+  they are already saved in the database's `settings` table — the app reads them from
+  there. Environment variables only seed settings that aren't already present.
+- Notifications need HTTPS, so push only works on the deployed site, not localhost.
+- On Render's free plan the service sleeps after ~15 minutes idle. While asleep it
+  can't run the sync interval, so new replies aren't detected and no notifications
+  are sent. A paid instance is required for unattended reply alerts.
