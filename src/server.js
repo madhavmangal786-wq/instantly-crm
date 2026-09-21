@@ -157,7 +157,7 @@ app.post('/api/test-connections', async (req, res) => {
     const res2 = await aiClient.chat.completions.create({
       model,
       temperature: 0,
-      max_tokens: 60, // reasoning models spend tokens "thinking" before the answer
+      max_tokens: 256, // reasoning models spend a variable amount "thinking" first; 60 failed at random
       messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
     }, { timeout: 20000 });
     const text = (res2.choices && res2.choices[0].message.content || '').trim();

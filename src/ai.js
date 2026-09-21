@@ -42,10 +42,12 @@ async function pingModel(client, model) {
       {
         model,
         temperature: 0,
-        max_tokens: 60, // reasoning models spend tokens "thinking" before the answer
+        // Reasoning models spend a variable share of this "thinking" before answering
+        // (observed 35–59 tokens for a one-word reply), so a tight cap fails at random.
+        max_tokens: 256,
         messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
       },
-      { timeout: 6000 }
+      { timeout: 10000 }
     );
     return !!(res.choices[0].message.content || '').trim();
   } catch {
@@ -55,7 +57,10 @@ async function pingModel(client, model) {
 
 async function pickModel(client, configured) {
   const cached = lastWorkingModel || (await getSetting('ai_working_model', ''));
-  const candidates = [cached, configured, ...FREE_MODELS]
+  // The free-model fallbacks are OpenCode Zen names; on any other provider they don't
+  // exist, and pinging them only adds failed requests and delay.
+  const onOpenCode = String(client.baseURL || '').includes('opencode.ai');
+  const candidates = [cached, configured, ...(onOpenCode ? FREE_MODELS : [])]
     .filter((m, i, a) => m && a.indexOf(m) === i);
   for (const m of candidates) {
     if (await pingModel(client, m)) {
@@ -68,7 +73,9 @@ async function pickModel(client, configured) {
 }
 
 async function callModel(client, model, messages) {
-  const body = { model, temperature: 0.9, max_tokens: 500, messages };
+  // Headroom for reasoning: a realistic reply used ~290–330 tokens, of which thinking
+  // alone ranged 98–186. The prompt caps the reply itself at ~150 words.
+  const body = { model, temperature: 0.9, max_tokens: 1200, messages };
   try {
     const res = await client.chat.completions.create({ ...body, response_format: { type: 'json_object' } });
     const t = (res.choices[0].message.content || '').trim();
